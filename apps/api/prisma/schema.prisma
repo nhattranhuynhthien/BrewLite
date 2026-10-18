@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,57 +7,186 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  CUSTOMER
+  STAFF
+  ADMIN
+}
 
+enum OrderStatus {
+  PENDING
+  PAID
+  PAYMENT_FAILED
+  PREPARING
+  READY
+  COMPLETED
+  CANCELLED
+}
+
+enum Size {
+  S
+  M
+  L
+}
+
+enum PaymentMethod {
+  WALLET
+  CARD
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum PromotionType {
+  PERCENT
+  FIXED
+}
+
+enum LoyaltyType {
+  EARN
+  REDEEM
+  ADJUST
+}
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  name      String?
-  password  String
-  orders    Order[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  name          String?
+  password      String   // lưu bản hash bcrypt
+  role          Role     @default(CUSTOMER)
+  loyaltyPoints Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders              Order[]
+  loyaltyTransactions LoyaltyTransaction[]
 }
 
 model Product {
-  id          Int         @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   name        String
   description String?
-  price       Float
-  stock       Int
-  orderItems  OrderItem[]
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  price       Int      // VND, giá size S
+  imageUrl    String?
+  stock       Int      @default(0)
+  version     Int      @default(0) // optimistic locking
+  isAvailable Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sizes      ProductSize[]
+  orderItems OrderItem[]
+}
+
+model ProductSize {
+  id         Int  @id @default(autoincrement())
+  productId  Int
+  size       Size
+  extraPrice Int  @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, size])
+}
+
+model Topping {
+  id    Int    @id @default(autoincrement())
+  name  String @unique
+  price Int
+
+  orderItems OrderItemTopping[]
+}
+
+model Promotion {
+  id         Int           @id @default(autoincrement())
+  code       String        @unique
+  type       PromotionType
+  value      Int
+  minOrder   Int           @default(0)
+  startsAt   DateTime
+  endsAt     DateTime
+  usageLimit Int?
+  usedCount  Int           @default(0)
+  isActive   Boolean       @default(true)
+
+  orders Order[]
 }
 
 model Order {
-  id         Int         @id @default(autoincrement())
-  userId     Int
-  user       User        @relation(fields: [userId], references: [id])
-  items      OrderItem[]
-  payment    Payment?
-  total      Float
-  status     String      @default("PENDING")
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id          Int         @id @default(autoincrement())
+  userId      Int
+  status      OrderStatus @default(PENDING)
+  subtotal    Int
+  discount    Int         @default(0)
+  total       Int
+  promotionId Int?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user                User                 @relation(fields: [userId], references: [id])
+  promotion           Promotion?           @relation(fields: [promotionId], references: [id])
+  items               OrderItem[]
+  payments            Payment[]
+  loyaltyTransactions LoyaltyTransaction[]
+
+  @@index([userId])
+  @@index([status])
 }
 
 model OrderItem {
-  id        Int      @id @default(autoincrement())
+  id        Int  @id @default(autoincrement())
   orderId   Int
-  order     Order    @relation(fields: [orderId], references: [id])
   productId Int
-  product   Product  @relation(fields: [productId], references: [id])
+  size      Size @default(S)
   quantity  Int
-  price     Float
+  unitPrice Int  // giá 1 ly (size + topping) lúc đặt
+  lineTotal Int  // unitPrice * quantity
+
+  order    Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product  Product            @relation(fields: [productId], references: [id])
+  toppings OrderItemTopping[]
+
+  @@index([orderId])
+}
+
+model OrderItemTopping {
+  orderItemId Int
+  toppingId   Int
+  price       Int
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  topping   Topping   @relation(fields: [toppingId], references: [id])
+
+  @@id([orderItemId, toppingId])
 }
 
 model Payment {
-  id        Int      @id @default(autoincrement())
-  orderId   Int      @unique
-  order     Order    @relation(fields: [orderId], references: [id])
-  amount    Float
-  method    String
-  status    String   @default("PENDING")
-  createdAt DateTime @default(now())
+  id             Int           @id @default(autoincrement())
+  orderId        Int
+  idempotencyKey String        @unique
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  amount         Int
+  createdAt      DateTime      @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+}
+
+model LoyaltyTransaction {
+  id        Int         @id @default(autoincrement())
+  userId    Int
+  orderId   Int?
+  type      LoyaltyType
+  points    Int
+  createdAt DateTime    @default(now())
+
+  user  User   @relation(fields: [userId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@index([userId])
 }
