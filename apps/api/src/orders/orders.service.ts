@@ -7,8 +7,21 @@ import { PrismaService } from '../prisma/prisma.service';
 export class OrdersService {
   constructor(private prisma: PrismaService) {}
 
-  create(createOrderDto: CreateOrderDto) {
-    return 'This action adds a new order';
+  async create(createOrderDto: CreateOrderDto) {
+    
+    const newOrder = await this.prisma.order.create({
+      data: {
+        ...createOrderDto,
+        status: 'PENDING', // Cứng ép trạng thái PENDING theo yêu cầu task
+      },
+    });
+
+    
+    return {
+      message: 'Tạo đơn hàng thành công',
+      orderId: newOrder.id, // Trả về mã đơn
+      order: newOrder
+    };
   }
 
   findAll() {
