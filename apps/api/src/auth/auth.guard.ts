@@ -1,13 +1,13 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Request } from 'express';
+import { AuthenticatedRequest, AuthenticatedUser } from './authenticated-request';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(private jwtService: JwtService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = this.extractTokenFromHeader(request);
     
     if (!token) {
@@ -15,17 +15,20 @@ export class AuthGuard implements CanActivate {
     }
     try {
       // Xác thực token và gắn thông tin giải mã được vào request.user
-      const payload = await this.jwtService.verifyAsync(token, {
+      const payload = await this.jwtService.verifyAsync<AuthenticatedUser>(token, {
         secret: 'BREWLITE_SECRET_KEY_2026'
       });
-      request['user'] = payload;
+      if (typeof payload.sub !== 'number' || typeof payload.email !== 'string') {
+        throw new UnauthorizedException('Token không chứa danh tính người dùng hợp lệ');
+      }
+      request.user = payload;
     } catch {
       throw new UnauthorizedException('Token không hợp lệ hoặc đã hết hạn');
     }
     return true;
   }
 
-  private extractTokenFromHeader(request: Request): string | undefined {
+  private extractTokenFromHeader(request: AuthenticatedRequest): string | undefined {
     const [type, token] = request.headers.authorization?.split(' ') ?? [];
     return type === 'Bearer' ? token : undefined;
   }

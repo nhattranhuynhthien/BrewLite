@@ -1,14 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertTransition } from './order-status';
 
 @Injectable()
 export class OrdersService {
   constructor(private prisma: PrismaService) {}
 
   async create(createOrderDto: CreateOrderDto) {
-    
     const newOrder = await this.prisma.order.create({
       data: {
         ...createOrderDto,
@@ -16,7 +20,6 @@ export class OrdersService {
       },
     });
 
-    
     return {
       message: 'Tạo đơn hàng thành công',
       orderId: newOrder.id, // Trả về mã đơn
@@ -34,8 +37,32 @@ export class OrdersService {
     });
   }
 
-  update(id: number, updateOrderDto: UpdateOrderDto) {
-    return `This action updates a #${id} order`;
+  findByUser(userId: number) {
+    return this.prisma.order.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        items: { include: { product: true } },
+        payment: true,
+      },
+    });
+  }
+
+  async update(id: number, updateOrderDto: UpdateOrderDto) {
+    if (!updateOrderDto.status) {
+      throw new BadRequestException('Order status is required');
+    }
+
+    const order = await this.prisma.order.findUnique({ where: { id } });
+    if (!order) {
+      throw new NotFoundException(`Order ${id} not found`);
+    }
+
+    assertTransition(order.status, updateOrderDto.status);
+    return this.prisma.order.update({
+      where: { id },
+      data: { status: updateOrderDto.status },
+    });
   }
 
   remove(id: number) {

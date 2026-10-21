@@ -9,7 +9,17 @@ describe('ProductsService', () => {
   });
 
   it('returns all products', () => {
-    expect(service.findAll().length).toBeGreaterThan(0);
+    const products = service.findAll();
+
+    expect(products.length).toBeGreaterThan(0);
+    expect(products[0]).toEqual(
+      expect.objectContaining({
+        id: expect.any(Number),
+        name: expect.any(String),
+        price: expect.any(Number),
+        imageUrl: expect.any(String),
+      }),
+    );
   });
 
   it('returns one product by id', () => {

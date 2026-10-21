@@ -2,6 +2,9 @@
 
 Ưu tiên theo MoSCoW: Must, Should, Could, Won't.
 
+User Story, Acceptance Criteria và thứ tự Product Backlog được ghi tại
+[`user-stories-backlog.md`](./user-stories-backlog.md).
+
 ## Yêu cầu chức năng
 
 | Mã | Yêu cầu | Ưu tiên | Tiêu chí chấp nhận |

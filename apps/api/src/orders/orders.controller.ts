@@ -1,9 +1,21 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  Req,
+  ParseIntPipe,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'; // Bổ sung thư viện Swagger
 import { AuthGuard } from '../auth/auth.guard'; // Bổ sung Guard bảo vệ
+import { AuthenticatedRequest } from '../auth/authenticated-request';
 
 @ApiTags('Orders') // Nhóm vào mục Orders trên Swagger
 @ApiBearerAuth()   // Hiện biểu tượng ổ khóa cho các API trong file này
@@ -17,6 +29,12 @@ export class OrdersController {
     return this.ordersService.create(createOrderDto);
   }
 
+  @UseGuards(AuthGuard)
+  @Get('me')
+  findMine(@Req() request: AuthenticatedRequest) {
+    return this.ordersService.findByUser(request.user.sub);
+  }
+
   @Get()
   findAll() {
     return this.ordersService.findAll();
@@ -28,8 +46,12 @@ export class OrdersController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
-    return this.ordersService.update(+id, updateOrderDto);
+  @UseGuards(AuthGuard)
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateOrderDto: UpdateOrderDto,
+  ) {
+    return this.ordersService.update(id, updateOrderDto);
   }
 
   @Delete(':id')
