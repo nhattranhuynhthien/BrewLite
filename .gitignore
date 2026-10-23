@@ -23,3 +23,5 @@ out/
 .idea/
 *.log
 *.tsbuildinfo
+/mydocs
+
