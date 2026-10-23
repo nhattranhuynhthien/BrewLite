@@ -15,7 +15,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'; // Bổ sung thư viện Swagger
 import { AuthGuard } from '../auth/auth.guard'; // Bổ sung Guard bảo vệ
-import { AuthenticatedRequest } from '../auth/authenticated-request';
+import type { AuthenticatedRequest } from '../auth/authenticated-request';
 
 @ApiTags('Orders') // Nhóm vào mục Orders trên Swagger
 @ApiBearerAuth()   // Hiện biểu tượng ổ khóa cho các API trong file này

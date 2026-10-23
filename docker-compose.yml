@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-brewlite} -d ${POSTGRES_DB:-brewlite_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build: ./apps/api
@@ -23,7 +28,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-brewlite}:${POSTGRES_PASSWORD:-brewlite123}@db:5432/${POSTGRES_DB:-brewlite_db}?schema=public
       JWT_SECRET: ${JWT_SECRET:-brewlite_super_secret_jwt_key_2026}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "npx prisma migrate deploy --schema=prisma/schema.prisma && npm run start:prod"]
 
   frontend:
     build: ./apps/web
