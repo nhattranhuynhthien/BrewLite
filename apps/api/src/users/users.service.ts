@@ -11,11 +11,13 @@ export class UsersService {
   async create(createUserDto: CreateUserDto) {
     // Đoạn code này sẽ thực sự lưu dữ liệu xuống PostgreSQL
     const newUser = await this.prisma.user.create({
-      data: createUserDto,
+      data: {
+        ...createUserDto,
+      },
     });
     
     // Trả về dữ liệu người dùng vừa tạo (bao gồm cả id)
-    return newUser; 
+    return newUser;
   }
 
   // --- HÀM LẤY DỮ LIỆU THẬT ---

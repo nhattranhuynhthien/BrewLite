@@ -1,20 +1,24 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'; // Bổ sung thư viện Swagger
-import { AuthGuard } from '../auth/auth.guard'; // Bổ sung Guard bảo vệ
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { AuthGuard } from '../auth/auth.guard';
 
-@ApiTags('Orders') // Nhóm vào mục Orders trên Swagger
-@ApiBearerAuth()   // Hiện biểu tượng ổ khóa cho các API trong file này
+@ApiTags('Orders')
+@ApiBearerAuth()
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
-  @UseGuards(AuthGuard) // Chặn API này, ai có Token mới được vào
+  @UseGuards(AuthGuard)
   @Post()
-  create(@Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(createOrderDto);
+  create(@Req() req: any, @Body() createOrderDto: CreateOrderDto) {
+    
+    const userId = req.user?.id || req.user?.sub; 
+    
+    
+    return this.ordersService.create(userId, createOrderDto);
   }
 
   @Get()
