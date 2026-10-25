@@ -1,4 +1,3 @@
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -36,7 +35,7 @@ model Order {
   userId     Int
   user       User        @relation(fields: [userId], references: [id])
   items      OrderItem[]
-  payment    Payment?
+  payment    Payment[]
   total      Float
   status     String      @default("PENDING")
   createdAt  DateTime    @default(now())
@@ -55,10 +54,16 @@ model OrderItem {
 
 model Payment {
   id        Int      @id @default(autoincrement())
-  orderId   Int      @unique
+  orderId   Int      
   order     Order    @relation(fields: [orderId], references: [id])
   amount    Float
   method    String
   status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+}
+model ProcPaymentKey {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique // Lưu khóa Idempotency-Key từ client
+  response  String   // Lưu kết quả JSON trả về
   createdAt DateTime @default(now())
 }
