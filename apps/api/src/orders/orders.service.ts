@@ -56,12 +56,15 @@ export class OrdersService {
   }
 
   findAll() {
-    return this.prisma.order.findMany();
+    return this.prisma.order.findMany({
+      include: { items: true },
+    });
   }
 
   findOne(id: number) {
     return this.prisma.order.findUnique({
       where: { id },
+      include: { items: true },
     });
   }
 
