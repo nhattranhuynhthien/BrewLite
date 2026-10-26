@@ -21,4 +21,7 @@ out/
 .DS_Store
 .vscode/
 .idea/
-*.log*.tsbuildinfo
+*.log
+*.tsbuildinfo
+/mydocs
+

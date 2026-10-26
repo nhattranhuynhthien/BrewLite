@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, ParseIntPipe } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
@@ -15,10 +15,16 @@ export class OrdersController {
   @Post()
   create(@Req() req: any, @Body() createOrderDto: CreateOrderDto) {
     
-    const userId = req.user?.id || req.user?.sub; 
+    const userId = req.user?.id || req.user?.sub; cd ..\..
     
     
     return this.ordersService.create(userId, createOrderDto);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('me')
+  findMine(@Req() request: any) {
+    return this.ordersService.findByUser(request.user.sub);
   }
 
   @Get()
@@ -32,8 +38,12 @@ export class OrdersController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
-    return this.ordersService.update(+id, updateOrderDto);
+  @UseGuards(AuthGuard)
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateOrderDto: UpdateOrderDto,
+  ) {
+    return this.ordersService.update(id, updateOrderDto);
   }
 
   @Delete(':id')
