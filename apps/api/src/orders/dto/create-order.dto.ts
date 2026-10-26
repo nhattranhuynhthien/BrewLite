@@ -1,33 +1,29 @@
-import { IsNotEmpty, IsNumber, IsArray, ValidateNested, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
-class OrderItemDto {
-  @ApiProperty({ description: 'ID của sản phẩm' })
+
+export class OrderItemDto {
+  @ApiProperty({ description: 'ID của sản phẩm (món nước)', example: 1 })
   @IsNotEmpty({ message: 'Product ID không được để trống' })
   @IsNumber({}, { message: 'Product ID phải là số' })
   productId: number;
 
-  @ApiProperty({ description: 'Số lượng mua' })
+  @ApiProperty({ description: 'Số lượng đặt mua', example: 2 })
   @IsNotEmpty({ message: 'Số lượng không được để trống' })
   @IsNumber({}, { message: 'Số lượng phải là số' })
+  @Min(1, { message: 'Số lượng ít nhất phải là 1' })
   quantity: number;
 }
 
+
 export class CreateOrderDto {
-  @ApiProperty({ description: 'ID của người dùng đặt hàng' })
-  @IsNotEmpty({ message: 'User ID không được để trống' })
-  @IsNumber({}, { message: 'User ID phải là số' })
-  userId: number;
-
-  @ApiProperty({ description: 'Tổng tiền của đơn hàng (Tùy chọn, server tự tính)', required: false })
-  @IsOptional()
-  @IsNumber({}, { message: 'Total phải là số' })
-  total?: number;
-
-  @ApiProperty({ description: 'Danh sách sản phẩm trong đơn hàng', type: [OrderItemDto] })
-  @IsArray({ message: 'Items phải là một mảng' })
-  @ValidateNested({ each: true })
-  @Type(() => OrderItemDto)
+  @ApiProperty({ 
+    description: 'Danh sách các món nước khách hàng muốn đặt',
+    type: [OrderItemDto] 
+  })
+  @IsArray({ message: 'Danh sách đơn hàng phải là một mảng' })
+  @ValidateNested({ each: true }) 
+  @Type(() => OrderItemDto)     
   items: OrderItemDto[];
 }

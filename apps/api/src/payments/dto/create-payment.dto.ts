@@ -1,27 +1,14 @@
-import { IsNotEmpty, IsNumber, IsString, IsIn, IsPositive } from 'class-validator';
+import { IsNumber, IsString, IsNotEmpty } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CreatePaymentDto {
-  @IsNotEmpty()
+  @ApiProperty({ example: 6 })
   @IsNumber()
+  @IsNotEmpty()
   orderId: number;
 
-  @IsNotEmpty()
+  @ApiProperty({ example: 'MOMO' })
   @IsString()
-  @IsIn(['WALLET', 'CARD']) // Giả sử hỗ trợ Ví hoặc Thẻ
-  method: string;
-
   @IsNotEmpty()
-  @IsNumber()
-  amount: number;
-}
-export class ProcPaymentDto {
-  @IsNumber()
-  orderId: number;
-
-  @IsNumber()
-  @IsPositive()
-  amount: number;
-
-  @IsString()
   method: string;
 }

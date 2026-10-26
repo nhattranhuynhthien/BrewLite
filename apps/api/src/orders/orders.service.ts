@@ -1,6 +1,4 @@
-
-// src/orders/orders.service.ts
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,84 +8,51 @@ import { assertTransition } from './order-status';
 export class OrdersService {
   constructor(private prisma: PrismaService) {}
 
-  async create(createOrderDto: CreateOrderDto) {
-    const { userId, items } = createOrderDto;
+  async create(userId: number, createOrderDto: CreateOrderDto) {
+    let calculatedTotal = 0;
+    const orderItemsData = [];
 
-    if (!items || items.length === 0) {
-      throw new BadRequestException('Đơn hàng phải chứa ít nhất một sản phẩm.');
-    }
-
-    // Sử dụng Prisma Transaction để đảm bảo tính toàn vẹn dữ liệu (Atomicity)
-    return await this.prisma.$transaction(async (tx) => {
-      let calculatedTotal = 0; // Đổi tên biến rõ ràng để TypeScript hiểu chắc chắn là number
-      const orderItemsData = [];
-
-      for (const item of items) {
-        // 1. Kiểm tra sản phẩm có tồn tại không
-        const product = await tx.product.findUnique({
-          where: { id: item.productId },
-        });
-
-        if (!product) {
-          throw new NotFoundException(`Không tìm thấy sản phẩm với ID: ${item.productId}`);
-        }
-
-        // 2. Kiểm tra sơ bộ tồn kho
-        if (product.stock < item.quantity) {
-          throw new BadRequestException(
-            `Sản phẩm "${product.name}" không đủ hàng. Chỉ còn lại ${product.stock} sản phẩm.`
-          );
-        }
-
-        // 3. Thực hiện Optimistic Locking / Atomic Update qua updateMany với điều kiện stock >= quantity
-        const updateResult = await tx.product.updateMany({
-          where: {
-            id: item.productId,
-            stock: { gte: item.quantity },
-          },
-          data: {
-            stock: {
-              decrement: item.quantity,
-            },
-          },
-        });
-
-        if (updateResult.count === 0) {
-          throw new ConflictException(
-            `Xung đột tồn kho cho sản phẩm "${product.name}" do có nhiều người cùng mua. Vui lòng thử lại!`
-          );
-        }
-
-        // Cộng dồn tổng tiền chính xác
-        calculatedTotal += product.price * item.quantity;
-        orderItemsData.push({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: product.price,
-        });
-      }
-
-      // 4. Tạo bản ghi Order và OrderItems liên quan
-      const newOrder = await tx.order.create({
-        data: {
-          userId,
-          total: calculatedTotal, // Truyền giá trị number chắc chắn vào đây
-          status: 'PENDING',
-          items: {
-            create: orderItemsData,
-          },
-        },
-        include: {
-          items: true,
-        },
+    
+    for (const item of createOrderDto.items) {
+      const product = await this.prisma.product.findUnique({
+       where: { id: Number(item.productId) },
       });
 
-      return {
-        message: 'Tạo đơn hàng thành công và cập nhật tồn kho',
-        orderId: newOrder.id,
-        order: newOrder,
-      };
+      if (!product) {
+        throw new NotFoundException(`Không tìm thấy sản phẩm có mã: ${item.productId}`);
+      }
+
+      
+      calculatedTotal += product.price * item.quantity;
+
+     
+      orderItemsData.push({
+        productId: item.productId,
+        quantity: item.quantity,
+        price: product.price,
+      });
+    }
+
+   
+    const newOrder = await this.prisma.order.create({
+      data: {
+        userId: userId,
+        total: calculatedTotal,
+        status: 'PENDING',
+        items: { 
+          create: orderItemsData,
+        },
+      },
+      include: {
+        items: true, 
+      },
     });
+
+    return {
+      message: 'Tạo đơn hàng thành công',
+      orderId: newOrder.id,
+      order: newOrder,
+    };
   }
 
   findAll() {
