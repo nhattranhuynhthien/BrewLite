@@ -1,9 +1,17 @@
-import styles from '@/styles/HomePage.module.css';
+
+import Header from '@/app/(client)/partials/Header';
 
 export default function HomePage() {
   return (
-    <main className={styles.page}>
-      <h1 className={styles.title}>Hello</h1>
-    </main>
+    <>
+      <Header />
+      {/* ================= CONTENT ================= */}
+      <main className="menu-content-box">
+        Đây là content
+      </main>
+
+      {/* ================= FOOTER ================= */}
+      {/* <Footer /> */}
+    </>
   );
 }

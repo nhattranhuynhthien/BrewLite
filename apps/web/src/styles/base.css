@@ -1,0 +1,26 @@
+.menu-content-box {
+  max-width: 1200px;
+  min-height: 300px;
+  margin: 40px auto;
+  padding: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #f36a6a;
+  border-radius: 8px;
+  background-color: #fff;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 8%);
+  color: #071c1f;
+  font-size: 24px;
+  font-weight: 600;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .menu-content-box {
+    min-height: 220px;
+    margin: 24px 16px;
+    padding: 20px;
+    font-size: 20px;
+  }
+}
