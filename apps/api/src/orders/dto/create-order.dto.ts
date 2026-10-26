@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsArray, ValidateNested, Min, IsOptional, IsString} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -24,6 +24,23 @@ export class CreateOrderDto {
   })
   @IsArray({ message: 'Danh sách đơn hàng phải là một mảng' })
   @ValidateNested({ each: true }) 
-  @Type(() => OrderItemDto)     
-  items: OrderItemDto[];
+  @Type(() => OrderItemDto)      
+  items: OrderItemDto[]; // Đã xóa @IsOptional và @IsString ở đây
+
+  @ApiProperty({ 
+    description: 'Mã giảm giá áp dụng cho đơn hàng (không bắt buộc)', 
+    example: 'GIAM10',
+    required: false 
+  })
+  @IsOptional()
+  @IsString({ message: 'Mã giảm giá phải là một chuỗi ký tự' })
+  voucherCode?: string; 
+  @ApiProperty({ 
+    description: 'Số điểm thưởng muốn sử dụng để giảm giá', 
+    example: 5,
+    required: false 
+  })
+  @IsOptional()
+  @IsNumber({}, { message: 'Số điểm sử dụng phải là số' })
+  pointsToUse?: number;
 }

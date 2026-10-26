@@ -19,21 +19,30 @@ export class PaymentsService {
       throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
     }
 
-    // 2. Chạy Transaction: Nếu 1 trong 2 thao tác lỗi, toàn bộ sẽ bị hủy để bảo toàn dữ liệu
-    const [payment, updatedOrder] = await this.prisma.$transaction([
+    // Tính toán số điểm thưởng (1 điểm cho mỗi 10.000 VNĐ)
+    const pointsToAdd = Math.floor(order.total / 10000);
+
+    // 2. Chạy Transaction bao gồm 3 thao tác
+    const [payment, updatedOrder, updatedUser] = await this.prisma.$transaction([
       // Thao tác 1: Tạo bản ghi thanh toán mới
       this.prisma.payment.create({
-  data: {
-    orderId,
-    method,
-    amount: order.total, // Xóa bỏ hai dấu gạch chéo // ở đầu dòng này
-  },
-}),
+        data: {
+          orderId,
+          method,
+          amount: order.total,
+        },
+      }),
       
       // Thao tác 2: Cập nhật trạng thái đơn hàng thành "PAID"
       this.prisma.order.update({
         where: { id: orderId },
         data: { status: 'PAID' }, 
+      }),
+
+      // Thao tác 3: Cộng điểm vào tài khoản khách hàng
+      this.prisma.user.update({
+        where: { id: order.userId },
+        data: { rewardPoints: { increment: pointsToAdd } },
       }),
     ]);
 
@@ -41,6 +50,7 @@ export class PaymentsService {
       message: 'Thanh toán thành công',
       payment,
       order: updatedOrder,
+      rewardPointsAdded: pointsToAdd,
     };
   }
 
