@@ -15,7 +15,7 @@ export class OrdersController {
   @Post()
   create(@Req() req: any, @Body() createOrderDto: CreateOrderDto) {
     
-    const userId = req.user?.id || req.user?.sub; cd ..\..
+    const userId = req.user?.id || req.user?.sub; 
     
     
     return this.ordersService.create(userId, createOrderDto);
