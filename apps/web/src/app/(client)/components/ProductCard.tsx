@@ -1,4 +1,6 @@
+'use client';
 
+import { useState } from 'react';
 import Image from 'next/image';
 import { Plus } from 'lucide-react';
 import type { Product } from '@/types/product';
@@ -11,17 +13,18 @@ interface Props {
 }
 
 export default function ProductCard({ product, onAdd }: Props) {
+  const [imgSrc, setImgSrc] = useState(product.imageUrl || '/img/product-placeholder.svg');
+
   return (
     <article className="menu-card">
       <div className="menu-card__img">
-        {product.imageUrl && (
-          <Image
-            src={product.imageUrl}
-            alt={product.name}
-            fill
-            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
-          />
-        )}
+        <Image
+          src={imgSrc}
+          alt={product.name}
+          fill
+          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+          onError={() => setImgSrc('/img/product-placeholder.svg')}
+        />
       </div>
       <div className="menu-card__body">
         <h3 className="menu-card__name">{product.name}</h3>
