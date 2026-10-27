@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,100 +9,129 @@ export class OrdersService {
   constructor(private prisma: PrismaService) {}
 
   async create(userId: number, createOrderDto: CreateOrderDto) {
-    let calculatedTotal = 0;
-    const orderItemsData = [];
-
-    // 1. Tính tổng tiền từ danh sách sản phẩm
-    for (const item of createOrderDto.items) {
-      const product = await this.prisma.product.findUnique({
-        where: { id: Number(item.productId) },
-      });
-
-      if (!product) {
-        throw new NotFoundException(`Không tìm thấy sản phẩm có mã: ${item.productId}`);
-      }
-
-      calculatedTotal += product.price * item.quantity;
-
-      orderItemsData.push({
-        productId: item.productId,
-        quantity: item.quantity,
-        price: product.price,
-      });
+    if (!createOrderDto.items || createOrderDto.items.length === 0) {
+      throw new BadRequestException('Đơn hàng phải chứa ít nhất một sản phẩm.');
     }
 
-    // 2. Kiểm tra Voucher giảm giá (Chưa cập nhật CSDL vội)
-    let promoToUpdate = null;
-    if (createOrderDto.voucherCode) {
-      const promo = await this.prisma.promotion.findUnique({
-        where: { code: createOrderDto.voucherCode }
-      });
+    return await this.prisma.$transaction(async (tx) => {
+      let calculatedTotal = 0;
+      const orderItemsData = [];
 
-      if (promo && promo.usageLimit > 0) {
-        const discountAmount = Math.min((calculatedTotal * promo.discountPct) / 100, promo.maxDiscount);
-        calculatedTotal -= discountAmount;
-        promoToUpdate = promo.id; // Lưu lại ID để trừ lượt ở bước Transaction
-      } else {
-        throw new BadRequestException('Mã giảm giá không hợp lệ hoặc đã hết hạn!'); 
+      // 1. Kiểm tra tồn kho sơ bộ và trừ tồn kho nguyên tử (Optimistic Locking)
+      for (const item of createOrderDto.items) {
+        const product = await tx.product.findUnique({
+          where: { id: Number(item.productId) },
+        });
+
+        if (!product) {
+          throw new NotFoundException(`Không tìm thấy sản phẩm có mã: ${item.productId}`);
+        }
+
+        // Kiểm tra tồn kho sơ bộ
+        if (product.stock < item.quantity) {
+          throw new BadRequestException(
+            `Sản phẩm "${product.name}" không đủ hàng. Chỉ còn lại ${product.stock} sản phẩm.`,
+          );
+        }
+
+        // Thực hiện Optimistic Locking / Atomic Update qua updateMany với điều kiện stock >= quantity
+        const updateResult = await tx.product.updateMany({
+          where: {
+            id: Number(item.productId),
+            stock: { gte: item.quantity },
+          },
+          data: {
+            stock: {
+              decrement: item.quantity,
+            },
+          },
+        });
+
+        if (updateResult.count === 0) {
+          throw new ConflictException(
+            `Xung đột tồn kho cho sản phẩm "${product.name}" do có nhiều người cùng mua. Vui lòng thử lại!`,
+          );
+        }
+
+        calculatedTotal += product.price * item.quantity;
+
+        orderItemsData.push({
+          productId: Number(item.productId),
+          quantity: item.quantity,
+          price: product.price,
+        });
       }
-    }
 
-    // 3. Kiểm tra logic dùng điểm thưởng
-    if (createOrderDto.pointsToUse) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-      });
+      // 2. Kiểm tra Voucher giảm giá
+      let promoToUpdate: number | null = null;
+      if (createOrderDto.voucherCode) {
+        const promo = await tx.promotion.findUnique({
+          where: { code: createOrderDto.voucherCode },
+        });
 
-      if (!user || user.rewardPoints < createOrderDto.pointsToUse) {
-        throw new BadRequestException('Tài khoản không đủ điểm thưởng để áp dụng');
+        if (promo && promo.usageLimit > 0) {
+          const discountAmount = Math.min((calculatedTotal * promo.discountPct) / 100, promo.maxDiscount);
+          calculatedTotal -= discountAmount;
+          promoToUpdate = promo.id;
+        } else {
+          throw new BadRequestException('Mã giảm giá không hợp lệ hoặc đã hết hạn!');
+        }
       }
-      
-      const pointDiscount = createOrderDto.pointsToUse * 1000; // 1 điểm = 1.000 VNĐ
-      calculatedTotal -= pointDiscount;
-    }
 
-    // Đảm bảo tổng tiền không bị âm
-    if (calculatedTotal < 0) calculatedTotal = 0;
+      // 3. Kiểm tra logic dùng điểm thưởng
+      if (createOrderDto.pointsToUse) {
+        const user = await tx.user.findUnique({
+          where: { id: userId },
+        });
 
-    // 4. Chạy Transaction: Lưu đơn hàng, trừ lượt voucher và trừ điểm CÙNG LÚC
-    const [newOrder] = await this.prisma.$transaction([
-      // Lệnh 1: Tạo đơn hàng
-      this.prisma.order.create({
+        if (!user || user.rewardPoints < createOrderDto.pointsToUse) {
+          throw new BadRequestException('Tài khoản không đủ điểm thưởng để áp dụng');
+        }
+
+        const pointDiscount = createOrderDto.pointsToUse * 1000; // 1 điểm = 1.000 VNĐ
+        calculatedTotal -= pointDiscount;
+      }
+
+      // Đảm bảo tổng tiền không bị âm
+      if (calculatedTotal < 0) calculatedTotal = 0;
+
+      // 4. Trừ lượt dùng của voucher (nếu có)
+      if (promoToUpdate) {
+        await tx.promotion.update({
+          where: { id: promoToUpdate },
+          data: { usageLimit: { decrement: 1 } },
+        });
+      }
+
+      // 5. Trừ điểm của người dùng (nếu có)
+      if (createOrderDto.pointsToUse) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { rewardPoints: { decrement: createOrderDto.pointsToUse } },
+        });
+      }
+
+      // 6. Tạo đơn hàng mới
+      const newOrder = await tx.order.create({
         data: {
           userId: userId,
           total: calculatedTotal,
           status: 'PENDING',
-          items: { 
+          items: {
             create: orderItemsData,
           },
         },
         include: {
-          items: true, 
+          items: true,
         },
-      }),
+      });
 
-      // Lệnh 2: Trừ lượt dùng của voucher (nếu có dùng)
-      ...(promoToUpdate ? [
-        this.prisma.promotion.update({
-          where: { id: promoToUpdate },
-          data: { usageLimit: { decrement: 1 } }
-        })
-      ] : []),
-
-      // Lệnh 3: Trừ điểm của người dùng (nếu có dùng)
-      ...(createOrderDto.pointsToUse ? [
-        this.prisma.user.update({
-          where: { id: userId },
-          data: { rewardPoints: { decrement: createOrderDto.pointsToUse } },
-        })
-      ] : []),
-    ]);
-
-    return {
-      message: 'Tạo đơn hàng thành công',
-      orderId: newOrder.id,
-      order: newOrder,
-    };
+      return {
+        message: 'Tạo đơn hàng thành công',
+        orderId: newOrder.id,
+        order: newOrder,
+      };
+    });
   }
 
   findAll() {

@@ -12,7 +12,7 @@ export class PaymentsController {
     @Headers('idempotency-key') idempotencyKey: string,
     @Body() createPaymentDto: CreatePaymentDto,
   ) {
-    return this.paymentsService.create(createPaymentDto);
+    return this.paymentsService.create(createPaymentDto, idempotencyKey);
   }
 
   @Get()

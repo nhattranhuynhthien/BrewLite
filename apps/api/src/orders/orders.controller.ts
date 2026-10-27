@@ -14,11 +14,9 @@ export class OrdersController {
   @UseGuards(AuthGuard)
   @Post()
   create(@Req() req: any, @Body() createOrderDto: CreateOrderDto) {
-    
-    const userId = req.user?.id || req.user?.sub; 
-    
-    
-    return this.ordersService.create(userId, createOrderDto);
+    const rawUserId = req.user?.id || req.user?.sub || createOrderDto.userId;
+    const userId = rawUserId ? Number(rawUserId) : undefined;
+    return this.ordersService.create(userId as number, createOrderDto);
   }
 
   @UseGuards(AuthGuard)
