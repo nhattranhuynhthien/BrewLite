@@ -26,6 +26,9 @@ export class OrdersService {
         if (!product) {
           throw new NotFoundException(`Không tìm thấy sản phẩm có mã: ${item.productId}`);
         }
+        if (!product.isAvailable) {
+          throw new BadRequestException(`Sản phẩm "${product.name}" hiện không khả dụng.`);
+        }
 
         // Kiểm tra tồn kho sơ bộ
         if (product.stock < item.quantity) {
@@ -156,6 +159,18 @@ export class OrdersService {
         payment: true,
       },
     });
+  }
+
+  async findForUser(id: number, userId: number) {
+    const order = await this.prisma.order.findFirst({
+      where: { id, userId },
+      include: {
+        items: { include: { product: true } },
+        payment: true,
+      },
+    });
+    if (!order) throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
+    return order;
   }
 
   async update(id: number, updateOrderDto: UpdateOrderDto) {

@@ -1,41 +1,38 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { CreatePaymentDto } from './dto/create-payment.dto';
-import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class PaymentsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(createPaymentDto: CreatePaymentDto, idempotencyKey?: string) {
+  async create(createPaymentDto: CreatePaymentDto, idempotencyKey: string | undefined, userId: number) {
     if (!idempotencyKey) {
       throw new BadRequestException('Thiếu Idempotency-Key trong Header');
     }
 
-    // 0. Kiểm tra xem Idempotency-Key này đã được xử lý trước đó chưa
+    const { orderId, method } = createPaymentDto;
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+
+    if (!order || order.userId !== userId) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
+    }
+
     const existingKey = await this.prisma.procPaymentKey.findUnique({
       where: { key: idempotencyKey },
     });
-
-    // Nếu key đã tồn tại -> Trả về luôn kết quả từ cache (không chạy lại logic thanh toán)
     if (existingKey) {
       const parsedResponse = JSON.parse(existingKey.response);
+      if (parsedResponse.payment?.orderId !== orderId) {
+        throw new ConflictException('Idempotency-Key đã được dùng cho một yêu cầu khác.');
+      }
       return {
         fromCache: true,
         idempotencyKey,
         ...parsedResponse,
       };
-    }
-
-    const { orderId, method, amount } = createPaymentDto;
-
-    // 1. Kiểm tra đơn hàng có tồn tại không
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-    });
-
-    if (!order) {
-      throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
     }
 
     // 2. Kiểm tra xem đơn hàng này đã từng thanh toán thành công chưa
@@ -49,7 +46,7 @@ export class PaymentsService {
 
     // Tính toán số điểm thưởng (1 điểm cho mỗi 10.000 VNĐ)
     const pointsToAdd = Math.floor(order.total / 10000);
-    const paymentAmount = amount !== undefined ? amount : order.total;
+    const paymentAmount = order.total;
 
     // 3. Chạy Transaction: Tạo Payment, cập nhật Order thành PAID, cộng điểm User
     const [payment, updatedOrder] = await this.prisma.$transaction([
@@ -96,21 +93,4 @@ export class PaymentsService {
     };
   }
 
-  findAll() {
-    return this.prisma.payment.findMany();
-  }
-
-  findOne(id: number) {
-    return this.prisma.payment.findUnique({
-      where: { id },
-    });
-  }
-
-  update(id: number, updatePaymentDto: UpdatePaymentDto) {
-    return `This action updates a #${id} payment`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} payment`;
-  }
 }

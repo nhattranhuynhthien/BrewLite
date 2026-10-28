@@ -8,17 +8,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  name      String?
-  password  String
-  orders    Order[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  rewardPoints Int @default(0)
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  name         String?
+  password     String
+  orders       Order[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  rewardPoints Int      @default(0)
 }
 
 model Product {
@@ -28,52 +26,56 @@ model Product {
   price       Float
   stock       Int
   imageUrl    String?
+  category    String      @default("other")
+  isAvailable Boolean     @default(true)
   orderItems  OrderItem[]
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 }
+
 model Promotion {
-  id          Int      @id @default(autoincrement())
-  code        String   @unique
-  discountPct Int      // Phần trăm giảm giá (ví dụ: 10)
-  maxDiscount Int      // Số tiền giảm tối đa
-  usageLimit  Int      // Số lượt dùng còn lại
+  id          Int    @id @default(autoincrement())
+  code        String @unique
+  discountPct Int // Phần trăm giảm giá (ví dụ: 10)
+  maxDiscount Int // Số tiền giảm tối đa
+  usageLimit  Int // Số lượt dùng còn lại
 }
 
 model Order {
-  id         Int         @id @default(autoincrement())
-  userId     Int
-  user       User        @relation(fields: [userId], references: [id])
-  items      OrderItem[]
-  payment    Payment[]
-  total      Float
-  status     String      @default("PENDING")
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id        Int         @id @default(autoincrement())
+  userId    Int
+  user      User        @relation(fields: [userId], references: [id])
+  items     OrderItem[]
+  payment   Payment[]
+  total     Float
+  status    String      @default("PENDING")
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
 }
 
 model OrderItem {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   orderId   Int
-  order     Order    @relation(fields: [orderId], references: [id])
+  order     Order   @relation(fields: [orderId], references: [id])
   productId Int
-  product   Product  @relation(fields: [productId], references: [id])
+  product   Product @relation(fields: [productId], references: [id])
   quantity  Int
   price     Float
 }
 
 model Payment {
   id        Int      @id @default(autoincrement())
-  orderId   Int      
+  orderId   Int
   order     Order    @relation(fields: [orderId], references: [id])
   amount    Float
   method    String
   status    String   @default("PENDING")
   createdAt DateTime @default(now())
 }
+
 model ProcPaymentKey {
   id        Int      @id @default(autoincrement())
   key       String   @unique // Lưu khóa Idempotency-Key từ client
-  response  String   // Lưu kết quả JSON trả về
+  response  String // Lưu kết quả JSON trả về
   createdAt DateTime @default(now())
 }

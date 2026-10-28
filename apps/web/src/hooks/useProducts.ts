@@ -9,12 +9,11 @@ export function useProducts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const fetchProducts = useCallback(async () => {
     try {
       const data = await apiFetch<Product[]>('/products');
       setProducts(data);
+      setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không tải được menu');
     } finally {
@@ -22,9 +21,29 @@ export function useProducts() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const reload = useCallback(() => {
+    setLoading(true);
+    setError('');
+    return fetchProducts();
+  }, [fetchProducts]);
 
-  return { products, loading, error, reload: load };
+  useEffect(() => {
+    let active = true;
+    apiFetch<Product[]>('/products')
+      .then((data) => {
+        if (active) {
+          setProducts(data);
+          setError('');
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : 'Không tải được menu');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  return { products, loading, error, reload };
 }

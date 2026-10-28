@@ -1,42 +1,33 @@
-import { Injectable } from '@nestjs/common';
-import { CreateUserDto } from './dto/create-user.dto';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { PrismaService } from '../prisma/prisma.service'; // Import Prisma
 
 @Injectable()
 export class UsersService {
-  // Nhúng Prisma vào thông qua constructor
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async create(createUserDto: CreateUserDto) {
-    // Đoạn code này sẽ thực sự lưu dữ liệu xuống PostgreSQL
-    const newUser = await this.prisma.user.create({
-      data: {
-        ...createUserDto,
-      },
-    });
-    
-    // Trả về dữ liệu người dùng vừa tạo (bao gồm cả id)
-    return newUser;
-  }
-
-  // --- HÀM LẤY DỮ LIỆU THẬT ---
-  findAll() {
-    // Gọi thẳng vào bảng User trong PostgreSQL để lấy toàn bộ danh sách
-    return this.prisma.user.findMany(); 
-  }
-
-  findOne(id: number) {
-    return this.prisma.user.findUnique({
+  async findOne(id: number) {
+    const user = await this.prisma.user.findUnique({
       where: { id },
+      select: { id: true, name: true, email: true, rewardPoints: true, createdAt: true },
     });
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản');
+    return user;
   }
 
-  update(id: number, updateUserDto: UpdateUserDto) {
-    return `This action updates a #${id} user`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} user`;
+  async update(id: number, updateUserDto: UpdateUserDto) {
+    try {
+      return await this.prisma.user.update({
+        where: { id },
+        data: { name: updateUserDto.name.trim() },
+        select: { id: true, name: true, email: true, rewardPoints: true, createdAt: true },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new NotFoundException('Không tìm thấy tài khoản');
+      }
+      throw error;
+    }
   }
 }

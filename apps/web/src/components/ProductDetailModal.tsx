@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { Minus, Plus, ShoppingCart, X } from 'lucide-react';
 import type { Product } from '@/types/product';
+import '@/styles/ProductDetailModal.css';
 
 type Size = 'S' | 'M' | 'L';
 type Sweetness = 'Ít đường' | 'Bình thường' | 'Nhiều đường';

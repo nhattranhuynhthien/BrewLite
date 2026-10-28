@@ -9,6 +9,7 @@ describe('OrdersService', () => {
   const prisma = {
     order: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
       create: jest.fn(),
@@ -70,5 +71,25 @@ describe('OrdersService', () => {
         payment: true,
       },
     });
+  });
+
+  it('only returns order details when the authenticated user owns the order', async () => {
+    const order = { id: 7, userId: 42, items: [], payment: [] };
+    prisma.order.findFirst.mockResolvedValue(order);
+
+    await expect(service.findForUser(7, 42)).resolves.toBe(order);
+    expect(prisma.order.findFirst).toHaveBeenCalledWith({
+      where: { id: 7, userId: 42 },
+      include: {
+        items: { include: { product: true } },
+        payment: true,
+      },
+    });
+  });
+
+  it('does not expose another user’s order', async () => {
+    prisma.order.findFirst.mockResolvedValue(null);
+
+    await expect(service.findForUser(7, 12)).rejects.toThrow('Không tìm thấy đơn hàng 7');
   });
 });
