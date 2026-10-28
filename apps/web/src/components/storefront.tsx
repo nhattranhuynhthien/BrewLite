@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { apiFetch, getAccessToken, getUserIdFromAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
+import SiteHeader from '@/layouts/SiteHeader';
 import { useCartStore, type CartItem } from '@/store/cart-store';
 import type { Product } from '@/types/product';
 
@@ -41,7 +42,7 @@ function Status({ value }: { value: string }) {
   return <span className={`status-pill status-${value.toLowerCase()}`}>{statuses[value] ?? value}</span>;
 }
 
-export default function Storefront() {
+export default function Storefront({ initialView = 'menu' }: { initialView?: View }) {
   const items = useCartStore((state) => state.items);
   const addItem = useCartStore((state) => state.addItem);
   const setQuantity = useCartStore((state) => state.setQuantity);
@@ -51,7 +52,8 @@ export default function Storefront() {
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState('');
-  const [view, setView] = useState<View>('menu');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [view, setView] = useState<View>(initialView);
   const [method, setMethod] = useState<PaymentMethod>('WALLET');
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -67,8 +69,9 @@ export default function Storefront() {
   const idempotencyKey = useRef<string | null>(null);
 
   useEffect(() => {
-    useCartStore.persist.rehydrate();
-  }, []);
+    if (initialView !== 'checkout' || window.location.search === '') return;
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+  }, [initialView]);
 
   useEffect(() => {
     let active = true;
@@ -96,11 +99,17 @@ export default function Storefront() {
     return () => { active = false; };
   }, [view, token, historyRequest]);
 
-  const count = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
+  const filteredProducts = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase('vi');
+    return query
+      ? products.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
+      : products;
+  }, [products, searchQuery]);
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
     [items],
   );
+  const count = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -239,21 +248,23 @@ export default function Storefront() {
   );
 
   return (
-    <main className="site-shell">
-      <header className="site-header">
-        <a className="brand" href="#top" onClick={() => setView('menu')}><span className="brand-mark">B</span><span>Brew<span>Lite</span></span></a>
-        <nav className="main-nav" aria-label="Điều hướng chính">
-          <button className={view === 'menu' ? 'nav-link active' : 'nav-link'} onClick={() => setView('menu')} type="button">Thực đơn</button>
-          <button className={view === 'orders' ? 'nav-link active' : 'nav-link'} onClick={openHistory} type="button">Đơn hàng</button>
-        </nav>
-        <div className="header-actions">
-          {token
-            ? <button className="account-button" onClick={signOut} title="Đăng xuất" type="button"><span className="account-avatar">B</span><span className="account-label">Tài khoản</span></button>
-            : <button className="button button-outline sign-in-button" onClick={() => { setAuthMode('login'); setAuthOpen(true); }} type="button">Đăng nhập</button>}
-          <button className="bag-button" onClick={() => setView('menu')} type="button" aria-label={`Giỏ hàng, ${count} món`}><span aria-hidden="true">▱</span><span className="bag-count">{count}</span></button>
-        </div>
-      </header>
+    <>
+      <SiteHeader
+        navItems={[
+          { label: 'Menu', active: view === 'menu', onClick: () => setView('menu') },
+          { label: 'Đơn hàng', active: view === 'orders', onClick: openHistory },
+        ]}
+        onSearchChange={setSearchQuery}
+        onSearchOpen={() => setView('menu')}
+        onLogin={() => { setAuthMode('login'); setAuthOpen(true); }}
+        authenticated={Boolean(token)}
+        onSignOut={signOut}
+        cartHref="/cart"
+        brandHref="#top"
+        onBrandClick={() => setView('menu')}
+      />
 
+      <main className="site-shell">
       {view === 'menu' && <>
         <section className="hero" id="top">
           <div className="hero-copy">
@@ -275,9 +286,10 @@ export default function Storefront() {
             {productsLoading ? <div className="state-message"><span className="loader" /> Đang tải thực đơn...</div>
               : productsError ? <div className="state-message state-error"><strong>Chưa thể tải thực đơn</strong><p>{productsError}</p><button className="button button-outline" onClick={() => window.location.reload()} type="button">Thử lại</button></div>
                 : products.length === 0 ? <div className="state-message">Hiện chưa có món nào trong thực đơn.</div>
-                  : <div className="product-grid">{products.map((product, index) => (
+                  : filteredProducts.length === 0 ? <div className="state-message">Không tìm thấy món phù hợp với “{searchQuery}”.</div>
+                  : <div className="product-grid">{filteredProducts.map((product, index) => (
                     <article className="product-card" key={product.id}>
-                      <div className="product-art-wrap">{index === 0 && <span className="product-tag">BÁN CHẠY</span>}<ProductArt id={product.id} />
+                      <div className="product-art-wrap">{product.id === products[0]?.id && <span className="product-tag">BÁN CHẠY</span>}<ProductArt id={product.id} />
                         <button className="add-button" onClick={() => addItem(product)} type="button" aria-label={`Thêm ${product.name} vào giỏ`}>+</button></div>
                       <div className="product-info"><div><h3>{product.name}</h3><p>{index % 2 === 0 ? 'Đậm đà, cân bằng' : 'Thơm dịu, dễ uống'}</p></div><strong>{currency(product.price)}</strong></div>
                     </article>
@@ -356,7 +368,8 @@ export default function Storefront() {
           <p className="auth-switch">{authMode === 'login' ? 'Chưa có tài khoản?' : 'Đã có tài khoản?'} <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError(''); }} type="button">{authMode === 'login' ? 'Đăng ký' : 'Đăng nhập'}</button></p>
         </section>
       </div>}
-    </main>
+      </main>
+    </>
   );
 }
 

@@ -9,6 +9,8 @@
   color: var(--ink);
 }
 
+.menu-empty { margin: 0; padding: 22px; border-radius: 10px; background: #fff; color: #6b766e; font-size: 0.9rem; }
+
 /* Hero */
 .menu-hero { position: relative; min-height: 150px; overflow: hidden; background: #eef3e8; }
 .menu-hero__bg { object-fit: cover; object-position: right center; }
