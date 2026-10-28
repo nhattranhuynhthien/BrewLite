@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { AuthGuard } from '../auth/auth.guard';
+import { JwtService } from '@nestjs/jwt';
 import type { AuthenticatedRequest } from '../auth/authenticated-request';
 
 describe('OrdersController', () => {
@@ -13,8 +15,14 @@ describe('OrdersController', () => {
     jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
       controllers: [OrdersController],
-      providers: [{ provide: OrdersService, useValue: ordersService }],
-    }).compile();
+      providers: [
+        { provide: OrdersService, useValue: ordersService },
+        { provide: JwtService, useValue: {} },
+      ],
+    })
+      .overrideGuard(AuthGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<OrdersController>(OrdersController);
   });

@@ -7,7 +7,16 @@ import { PrismaService } from '../prisma/prisma.service';
 export class PaymentsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(createPaymentDto: CreatePaymentDto) {
+  async create(createPaymentDto: CreatePaymentDto, idempotencyKey?: string) {
+    if (idempotencyKey) {
+      const cached = await this.prisma.procPaymentKey.findUnique({
+        where: { key: idempotencyKey },
+      });
+      if (cached) {
+        return JSON.parse(cached.response);
+      }
+    }
+
     const { orderId, method } = createPaymentDto;
 
     // 1. Kiểm tra xem đơn hàng có tồn tại không
@@ -19,17 +28,34 @@ export class PaymentsService {
       throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
     }
 
+    // Nếu đơn hàng đã được thanh toán rồi
+    if (order.status === 'PAID') {
+      const existingPayment = await this.prisma.payment.findFirst({
+        where: { orderId, status: 'PAID' },
+      });
+      const response = {
+        status: 'PAID',
+        message: 'Đơn hàng đã được thanh toán trước đó',
+        orderId: order.id,
+        orderStatus: order.status,
+        payment: existingPayment,
+        order,
+      };
+      return response;
+    }
+
     // Tính toán số điểm thưởng (1 điểm cho mỗi 10.000 VNĐ)
     const pointsToAdd = Math.floor(order.total / 10000);
 
     // 2. Chạy Transaction bao gồm 3 thao tác
     const [payment, updatedOrder, updatedUser] = await this.prisma.$transaction([
-      // Thao tác 1: Tạo bản ghi thanh toán mới
+      // Thao tác 1: Tạo bản ghi thanh toán mới với status PAID
       this.prisma.payment.create({
         data: {
           orderId,
           method,
           amount: order.total,
+          status: 'PAID',
         },
       }),
       
@@ -46,12 +72,28 @@ export class PaymentsService {
       }),
     ]);
 
-    return {
+    const result = {
+      status: 'PAID',
       message: 'Thanh toán thành công',
+      orderId: order.id,
+      orderStatus: updatedOrder.status,
       payment,
       order: updatedOrder,
       rewardPointsAdded: pointsToAdd,
     };
+
+    if (idempotencyKey) {
+      await this.prisma.procPaymentKey.create({
+        data: {
+          key: idempotencyKey,
+          response: JSON.stringify(result),
+        },
+      }).catch(() => {
+        // Bỏ qua lỗi trùng khóa nếu có race condition
+      });
+    }
+
+    return result;
   }
 
   findAll() {

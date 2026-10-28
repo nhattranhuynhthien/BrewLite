@@ -16,7 +16,7 @@ export class AuthGuard implements CanActivate {
     try {
       // Xác thực token và gắn thông tin giải mã được vào request.user
       const payload = await this.jwtService.verifyAsync<AuthenticatedUser>(token, {
-        secret: 'BREWLITE_SECRET_KEY_2026'
+        secret: process.env.JWT_SECRET || 'brewlite_super_secret_jwt_key_2026',
       });
       if (typeof payload.sub !== 'number' || typeof payload.email !== 'string') {
         throw new UnauthorizedException('Token không chứa danh tính người dùng hợp lệ');

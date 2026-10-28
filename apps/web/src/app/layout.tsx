@@ -6,7 +6,11 @@ export const metadata: Metadata = {
   description: "Đặt cà phê BrewLite trực tuyến, thanh toán không tiền mặt và theo dõi đơn hàng.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="vi">
       <body>{children}</body>
