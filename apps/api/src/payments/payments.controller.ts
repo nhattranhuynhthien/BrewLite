@@ -9,7 +9,7 @@ export class PaymentsController {
 
   @Post()
   async create(
-    @Headers('idempotency-key') idempotencyKey: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Body() createPaymentDto: CreatePaymentDto,
   ) {
     return this.paymentsService.create(createPaymentDto, idempotencyKey);

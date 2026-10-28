@@ -9,7 +9,7 @@ import { JwtModule } from '@nestjs/jwt'; // Bổ sung JwtModule
   imports: [
     JwtModule.register({
       global: true,
-      secret: 'BREWLITE_SECRET_KEY_2026', // Khóa bí mật dùng để ký Token
+      secret: process.env.JWT_SECRET || 'brewlite_super_secret_jwt_key_2026', // Khóa bí mật dùng để ký Token
       signOptions: { expiresIn: '1d' }, // Token có hiệu lực 1 ngày
     }),
   ],

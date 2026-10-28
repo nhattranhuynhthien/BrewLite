@@ -73,6 +73,8 @@ export class PaymentsService {
 
     const result = {
       message: 'Thanh toán thành công',
+      orderId: order.id,
+      orderStatus: updatedOrder.status,
       payment,
       order: updatedOrder,
       rewardPointsAdded: pointsToAdd,
