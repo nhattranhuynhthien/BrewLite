@@ -28,14 +28,14 @@ const item = (
   id: number,
   name: string,
   price: number,
-  image: string | null,
+  image: string,
   category: CategoryId,
 ): Product => ({
   id,
   name,
   description: null,
   price,
-  imageUrl: image ? img(image) : null,
+  imageUrl: img(image),
   stock: 100,
   isAvailable: true,
   category,
@@ -43,7 +43,7 @@ const item = (
 
 // Dữ liệu mẫu — sau này thay bằng API / database
 export const PRODUCTS: Product[] = [
-  item(1, 'Cà phê đen đá', 25000, null, 'coffee'),
+  item(1, 'Cà phê đen đá', 25000, 'ca-phe-den-da', 'coffee'),
   item(2, 'Cà phê sữa đá', 28000, 'ca-phe-sua-da', 'coffee'),
   item(3, 'Cà phê cappuccino', 35000, 'cappuccino', 'coffee'),
   item(4, 'Cà phê caramel', 38000, 'ca-phe-caramel', 'coffee'),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import {
   Coffee,
@@ -15,8 +15,10 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import ProductCard from '../components/ProductCard';
+import ProductDetailModal from '../components/ProductDetailModal';
 import { CATEGORIES, PRODUCTS } from '@/lib/menu-data';
 import type { CategoryId, Product } from '@/types/product';
+import { useCartStore } from '@/store/cart-store';
 import '@/styles/MenuPage.css';
 
 type Active = 'all' | CategoryId;
@@ -35,11 +37,12 @@ const PREVIEW_COUNT = 5;
 
 export default function MenuPage() {
   const [active, setActive] = useState<Active>('all');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const addItem = useCartStore((state) => state.addItem);
 
-  const handleAdd = (product: Product) => {
-    // TODO: nối với store giỏ hàng (src/store)
-    console.log('Thêm vào giỏ:', product.id);
-  };
+  useEffect(() => {
+    useCartStore.persist.rehydrate();
+  }, []);
 
   const sections = CATEGORIES.map((c) => ({
     ...c,
@@ -131,7 +134,7 @@ export default function MenuPage() {
                   </header>
                   <div className="menu-grid">
                     {items.map((p) => (
-                      <ProductCard key={p.id} product={p} onAdd={handleAdd} />
+                      <ProductCard key={p.id} product={p} onSelect={setSelectedProduct} />
                     ))}
                   </div>
                 </section>
@@ -140,6 +143,17 @@ export default function MenuPage() {
           </div>
         </div>
       </main>
+      {selectedProduct && (
+        <ProductDetailModal
+          key={selectedProduct.id}
+          product={selectedProduct}
+          onClose={() => setSelectedProduct(null)}
+          onAdd={(product, quantity) => {
+            addItem(product, quantity);
+            setSelectedProduct(null);
+          }}
+        />
+      )}
     </>
   );
 }
