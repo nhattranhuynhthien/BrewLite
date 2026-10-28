@@ -1,4 +1,6 @@
+'use client';
 
+import { useState } from 'react';
 import Image from 'next/image';
 import { Plus } from 'lucide-react';
 import type { Product } from '@/types/product';
