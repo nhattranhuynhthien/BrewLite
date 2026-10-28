@@ -12,7 +12,7 @@ export class CreatePaymentDto {
   @IsNotEmpty()
   method: string;
 
-  @ApiProperty({ example: 35000, required: false })
+  @ApiProperty({ example: 50000, required: false })
   @IsOptional()
   @IsNumber()
   amount?: number;

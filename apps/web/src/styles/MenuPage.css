@@ -1,0 +1,100 @@
+.menu {
+  --green: #1c6b3a;
+  --green-dark: #14522b;
+  --green-soft: #e4f1de;
+  --ink: #1f2a22;
+  --muted: #6b766e;
+  --bg: #fbfaf6;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* Hero */
+.menu-hero { position: relative; min-height: 150px; overflow: hidden; background: #eef3e8; }
+.menu-hero__bg { object-fit: cover; object-position: right center; }
+.menu-hero__inner { position: relative; max-width: 1200px; margin: 0 auto; padding: 28px 24px; }
+.menu-hero__script {
+  margin: 0;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-style: italic;
+  font-size: 1.6rem;
+  color: var(--green);
+}
+.menu-hero__title { margin: 2px 0 10px; font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 700; color: var(--green); }
+.menu-hero__desc { margin: 0; max-width: 340px; font-size: 0.85rem; line-height: 1.5; color: #3d4a41; }
+
+/* Layout */
+.menu-layout {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 28px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 28px 24px 56px;
+  align-items: start;
+}
+.menu-side { position: sticky; top: 88px; display: grid; gap: 20px; }
+
+/* Tabs */
+.menu-tabs { display: grid; gap: 2px; padding: 6px; background: #fff; border-radius: 14px; }
+.menu-tab {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--ink);
+  font: inherit; font-size: 0.88rem; text-align: left; cursor: pointer;
+}
+.menu-tab:hover { background: #f3f6ef; }
+.menu-tab.is-active { background: var(--green-soft); color: var(--green); font-weight: 600; }
+.menu-tab:focus-visible, .menu-card__add:focus-visible,
+.menu-section__more:focus-visible, .menu-promo__btn:focus-visible {
+  outline: 2px solid var(--green); outline-offset: 2px;
+}
+
+/* Promo */
+.menu-promo { display: grid; gap: 8px; padding: 16px; border-radius: 14px; background: var(--green-soft); color: var(--green); }
+.menu-promo p { margin: 0; font-weight: 600; font-size: 0.9rem; line-height: 1.35; }
+.menu-promo__btn {
+  width: 28px; height: 28px; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: var(--green); color: #fff; cursor: pointer;
+}
+
+/* Sections */
+.menu-section + .menu-section { margin-top: 36px; }
+.menu-section__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.menu-section__head h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.2rem; }
+.menu-section__head h2 svg { color: var(--green); }
+.menu-section__more {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.82rem; cursor: pointer;
+}
+.menu-section__more:hover { color: var(--green); }
+.menu-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+
+/* Card */
+.menu-card { background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(31, 42, 34, 0.06); }
+.menu-card__img { position: relative; aspect-ratio: 1 / 0.86; background: #efede4; }
+.menu-card__img img { object-fit: cover; }
+.menu-card__body { padding: 10px 12px 12px; }
+.menu-card__name { margin: 0 0 8px; font-size: 0.82rem; font-weight: 500; }
+.menu-card__row { display: flex; justify-content: space-between; align-items: center; }
+.menu-card__price { font-size: 0.85rem; font-weight: 700; color: var(--green); }
+.menu-card__add {
+  width: 24px; height: 24px; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: var(--green); color: #fff; cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.menu-card__add:hover { background: var(--green-dark); }
+.menu-card__add:active { transform: scale(0.9); }
+
+/* Responsive */
+@media (max-width: 1024px) { .menu-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 760px) {
+  .menu-layout { grid-template-columns: 1fr; gap: 20px; }
+  .menu-side { position: static; }
+  .menu-tabs { display: flex; overflow-x: auto; gap: 6px; }
+  .menu-tab { white-space: nowrap; flex: none; }
+  .menu-promo { display: none; }
+  .menu-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .menu-hero__desc { max-width: 60%; }
+}
+@media (prefers-reduced-motion: reduce) { .menu-card__add { transition: none; } }

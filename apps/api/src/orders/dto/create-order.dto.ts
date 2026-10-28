@@ -28,6 +28,15 @@ export class CreateOrderDto {
   items: OrderItemDto[]; // Đã xóa @IsOptional và @IsString ở đây
 
   @ApiProperty({ 
+    description: 'ID người dùng đặt hàng (tùy chọn khi gọi qua API)', 
+    example: 1,
+    required: false 
+  })
+  @IsOptional()
+  @IsNumber({}, { message: 'User ID phải là số' })
+  userId?: number;
+
+  @ApiProperty({ 
     description: 'Mã giảm giá áp dụng cho đơn hàng (không bắt buộc)', 
     example: 'GIAM10',
     required: false 

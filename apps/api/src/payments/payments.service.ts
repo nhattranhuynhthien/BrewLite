@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,18 +8,28 @@ export class PaymentsService {
   constructor(private prisma: PrismaService) {}
 
   async create(createPaymentDto: CreatePaymentDto, idempotencyKey?: string) {
-    if (idempotencyKey) {
-      const cached = await this.prisma.procPaymentKey.findUnique({
-        where: { key: idempotencyKey },
-      });
-      if (cached) {
-        return JSON.parse(cached.response);
-      }
+    if (!idempotencyKey) {
+      throw new BadRequestException('Thiếu Idempotency-Key trong Header');
     }
 
-    const { orderId, method } = createPaymentDto;
+    // 0. Kiểm tra xem Idempotency-Key này đã được xử lý trước đó chưa
+    const existingKey = await this.prisma.procPaymentKey.findUnique({
+      where: { key: idempotencyKey },
+    });
 
-    // 1. Kiểm tra xem đơn hàng có tồn tại không
+    // Nếu key đã tồn tại -> Trả về luôn kết quả từ cache (không chạy lại logic thanh toán)
+    if (existingKey) {
+      const parsedResponse = JSON.parse(existingKey.response);
+      return {
+        fromCache: true,
+        idempotencyKey,
+        ...parsedResponse,
+      };
+    }
+
+    const { orderId, method, amount } = createPaymentDto;
+
+    // 1. Kiểm tra đơn hàng có tồn tại không
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
@@ -28,44 +38,33 @@ export class PaymentsService {
       throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
     }
 
-    // Nếu đơn hàng đã được thanh toán rồi
-    if (order.status === 'PAID') {
-      const existingPayment = await this.prisma.payment.findFirst({
-        where: { orderId, status: 'PAID' },
-      });
-      const response = {
-        status: 'PAID',
-        message: 'Đơn hàng đã được thanh toán trước đó',
-        orderId: order.id,
-        orderStatus: order.status,
-        payment: existingPayment,
-        order,
-      };
-      return response;
+    // 2. Kiểm tra xem đơn hàng này đã từng thanh toán thành công chưa
+    const successfulPayment = await this.prisma.payment.findFirst({
+      where: { orderId, status: 'PAID' },
+    });
+
+    if (successfulPayment) {
+      throw new BadRequestException('Đơn hàng này đã được thanh toán thành công trước đó.');
     }
 
     // Tính toán số điểm thưởng (1 điểm cho mỗi 10.000 VNĐ)
     const pointsToAdd = Math.floor(order.total / 10000);
+    const paymentAmount = amount !== undefined ? amount : order.total;
 
-    // 2. Chạy Transaction bao gồm 3 thao tác
-    const [payment, updatedOrder, updatedUser] = await this.prisma.$transaction([
-      // Thao tác 1: Tạo bản ghi thanh toán mới với status PAID
+    // 3. Chạy Transaction: Tạo Payment, cập nhật Order thành PAID, cộng điểm User
+    const [payment, updatedOrder] = await this.prisma.$transaction([
       this.prisma.payment.create({
         data: {
           orderId,
           method,
-          amount: order.total,
+          amount: paymentAmount,
           status: 'PAID',
         },
       }),
-      
-      // Thao tác 2: Cập nhật trạng thái đơn hàng thành "PAID"
       this.prisma.order.update({
         where: { id: orderId },
-        data: { status: 'PAID' }, 
+        data: { status: 'PAID' },
       }),
-
-      // Thao tác 3: Cộng điểm vào tài khoản khách hàng
       this.prisma.user.update({
         where: { id: order.userId },
         data: { rewardPoints: { increment: pointsToAdd } },
@@ -73,7 +72,6 @@ export class PaymentsService {
     ]);
 
     const result = {
-      status: 'PAID',
       message: 'Thanh toán thành công',
       orderId: order.id,
       orderStatus: updatedOrder.status,
@@ -82,18 +80,19 @@ export class PaymentsService {
       rewardPointsAdded: pointsToAdd,
     };
 
-    if (idempotencyKey) {
-      await this.prisma.procPaymentKey.create({
-        data: {
-          key: idempotencyKey,
-          response: JSON.stringify(result),
-        },
-      }).catch(() => {
-        // Bỏ qua lỗi trùng khóa nếu có race condition
-      });
-    }
+    // 4. Lưu Idempotency-Key và kết quả JSON vào bảng ProcPaymentKey để chặn lặp request sau
+    await this.prisma.procPaymentKey.create({
+      data: {
+        key: idempotencyKey,
+        response: JSON.stringify(result),
+      },
+    });
 
-    return result;
+    return {
+      fromCache: false,
+      idempotencyKey,
+      ...result,
+    };
   }
 
   findAll() {
