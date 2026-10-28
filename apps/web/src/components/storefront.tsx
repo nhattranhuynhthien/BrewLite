@@ -203,17 +203,24 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
       const orderId = created.orderId ?? created.order?.id ?? created.id;
       if (orderId === undefined || orderId === null) throw new Error('API tạo đơn không trả về mã đơn hàng.');
 
-      const payment = await apiFetch<{ status: string; message?: string; orderStatus?: string; order?: { status?: string } }>('/payments', {
+      const payment = await apiFetch<{
+        status?: string;
+        message?: string;
+        orderStatus?: string;
+        payment?: { status?: string };
+        order?: { status?: string };
+      }>('/payments', {
         method: 'POST',
         headers: { 'Idempotency-Key': key },
         body: JSON.stringify({ orderId, amount: total, method }),
       });
-      if (!payment || typeof payment.status !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
-      if (payment.status === 'PAYMENT_FAILED') throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
-      if (payment.status !== 'PAID' && payment.status !== 'SUCCESS') {
-        throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${payment.status}).`);
+      const paymentStatus = payment?.status ?? payment?.orderStatus ?? payment?.payment?.status ?? payment?.order?.status;
+      if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
+      if (paymentStatus === 'PAYMENT_FAILED') throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
+      if (paymentStatus !== 'PAID' && paymentStatus !== 'SUCCESS') {
+        throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${paymentStatus}).`);
       }
-      setReceipt({ id: orderId, status: payment.order?.status ?? payment.orderStatus ?? 'PAID' });
+      setReceipt({ id: orderId, status: payment.order?.status ?? payment.orderStatus ?? paymentStatus ?? 'PAID' });
       clearCart();
       idempotencyKey.current = null;
       setView('confirmation');

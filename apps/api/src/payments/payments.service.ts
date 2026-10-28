@@ -72,6 +72,7 @@ export class PaymentsService {
     ]);
 
     const result = {
+      status: 'PAID',
       message: 'Thanh toán thành công',
       orderId: order.id,
       orderStatus: updatedOrder.status,
