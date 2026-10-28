@@ -15,8 +15,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import ProductCard from '../components/ProductCard';
+import ProductDetailModal from '../components/ProductDetailModal';
+import SiteHeader from '@/layouts/SiteHeader';
 import { CATEGORIES, PRODUCTS } from '@/lib/menu-data';
 import type { CategoryId, Product } from '@/types/product';
+import { useCartStore } from '@/store/cart-store';
 import '@/styles/MenuPage.css';
 
 type Active = 'all' | CategoryId;
@@ -35,15 +38,16 @@ const PREVIEW_COUNT = 5;
 
 export default function MenuPage() {
   const [active, setActive] = useState<Active>('all');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const addItem = useCartStore((state) => state.addItem);
 
-  const handleAdd = (product: Product) => {
-    // TODO: nối với store giỏ hàng (src/store)
-    console.log('Thêm vào giỏ:', product.id);
-  };
-
+  const query = searchQuery.trim().toLocaleLowerCase('vi');
   const sections = CATEGORIES.map((c) => ({
     ...c,
-    items: PRODUCTS.filter((p) => p.category === c.id),
+    items: PRODUCTS.filter(
+      (p) => p.category === c.id && (!query || p.name.toLocaleLowerCase('vi').includes(query)),
+    ),
   })).filter((s) => s.items.length > 0 && (active === 'all' || s.id === active));
 
   const tabs: { id: Active; label: string }[] = [
@@ -53,6 +57,16 @@ export default function MenuPage() {
 
   return (
     <>
+      <SiteHeader
+        navItems={[
+          { label: 'Trang chủ', href: '/' },
+          { label: 'Menu', href: '/menu', active: true },
+          { label: 'Khuyến mãi', href: '#menu-promo' },
+          { label: 'Giới thiệu', href: '#menu-intro' },
+        ]}
+        onSearchChange={setSearchQuery}
+        cartHref="/cart"
+      />
       <main className="menu">
         <section className="menu-hero">
           <Image
@@ -63,7 +77,7 @@ export default function MenuPage() {
             sizes="100vw"
             className="menu-hero__bg"
           />
-          <div className="menu-hero__inner">
+          <div className="menu-hero__inner" id="menu-intro">
             <p className="menu-hero__script">Thức uống ngon</p>
             <h1 className="menu-hero__title">Cho ngày thêm năng lượng</h1>
             <p className="menu-hero__desc">
@@ -93,7 +107,7 @@ export default function MenuPage() {
               })}
             </nav>
 
-            <div className="menu-promo">
+            <div className="menu-promo" id="menu-promo">
               <Leaf size={18} />
               <p>
                 Đặt hàng online
@@ -109,9 +123,11 @@ export default function MenuPage() {
           </aside>
 
           <div className="menu-main">
-            {sections.map((s) => {
+            {sections.length === 0 ? (
+              <p className="menu-empty">Không tìm thấy món phù hợp với “{searchQuery}”.</p>
+            ) : sections.map((s) => {
               const Icon = ICONS[s.id];
-              const items = active === 'all' ? s.items.slice(0, PREVIEW_COUNT) : s.items;
+              const items = active === 'all' && !query ? s.items.slice(0, PREVIEW_COUNT) : s.items;
               return (
                 <section key={s.id} className="menu-section">
                   <header className="menu-section__head">
@@ -131,7 +147,7 @@ export default function MenuPage() {
                   </header>
                   <div className="menu-grid">
                     {items.map((p) => (
-                      <ProductCard key={p.id} product={p} onAdd={handleAdd} />
+                      <ProductCard key={p.id} product={p} onSelect={setSelectedProduct} />
                     ))}
                   </div>
                 </section>
@@ -140,6 +156,17 @@ export default function MenuPage() {
           </div>
         </div>
       </main>
+      {selectedProduct && (
+        <ProductDetailModal
+          key={selectedProduct.id}
+          product={selectedProduct}
+          onClose={() => setSelectedProduct(null)}
+          onAdd={(product, quantity) => {
+            addItem(product, quantity);
+            setSelectedProduct(null);
+          }}
+        />
+      )}
     </>
   );
 }
