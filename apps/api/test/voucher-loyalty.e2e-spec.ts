@@ -46,7 +46,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
 
     authToken = await jwtService.signAsync(
       { sub: testUserId, email: user.email },
-      { secret: 'BREWLITE_SECRET_KEY_2026' },
+      { secret: process.env.JWT_SECRET || 'brewlite_super_secret_jwt_key_2026' },
     );
 
     // Chuẩn bị sản phẩm test (giá 100.000 VNĐ, tồn kho 50)

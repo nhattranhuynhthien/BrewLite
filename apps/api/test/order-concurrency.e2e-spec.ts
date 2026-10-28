@@ -41,7 +41,7 @@ describe('Order Concurrency & Stock Locking (Integration Test - Task 10.3)', () 
     // Tạo token JWT hợp lệ để vượt qua AuthGuard của POST /orders
     authToken = await jwtService.signAsync(
       { sub: testUserId, email: user.email },
-      { secret: 'BREWLITE_SECRET_KEY_2026' },
+      { secret: process.env.JWT_SECRET || 'brewlite_super_secret_jwt_key_2026' },
     );
 
     // Tạo sản phẩm có số lượng tồn kho giới hạn = 5
