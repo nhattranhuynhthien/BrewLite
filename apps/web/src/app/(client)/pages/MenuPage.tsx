@@ -15,9 +15,10 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import ProductCard from '../components/ProductCard';
-import ProductDetailModal from '../components/ProductDetailModal';
+import ProductDetailModal from '@/components/ProductDetailModal';
 import SiteHeader from '@/layouts/SiteHeader';
-import { CATEGORIES, PRODUCTS } from '@/lib/menu-data';
+import { useProducts } from '@/hooks/useProducts';
+import { CATEGORIES } from '@/lib/menu-data';
 import type { CategoryId, Product } from '@/types/product';
 import { useCartStore } from '@/store/cart-store';
 import '@/styles/MenuPage.css';
@@ -40,12 +41,13 @@ export default function MenuPage() {
   const [active, setActive] = useState<Active>('all');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const { products, loading, error, reload } = useProducts();
   const addItem = useCartStore((state) => state.addItem);
 
   const query = searchQuery.trim().toLocaleLowerCase('vi');
   const sections = CATEGORIES.map((c) => ({
     ...c,
-    items: PRODUCTS.filter(
+    items: products.filter(
       (p) => p.category === c.id && (!query || p.name.toLocaleLowerCase('vi').includes(query)),
     ),
   })).filter((s) => s.items.length > 0 && (active === 'all' || s.id === active));
@@ -123,7 +125,14 @@ export default function MenuPage() {
           </aside>
 
           <div className="menu-main">
-            {sections.length === 0 ? (
+            {loading ? (
+              <p className="menu-empty" role="status">Đang tải thực đơn...</p>
+            ) : error ? (
+              <div className="menu-empty" role="alert">
+                <p>Không thể tải thực đơn: {error}</p>
+                <button type="button" onClick={() => void reload()}>Thử lại</button>
+              </div>
+            ) : sections.length === 0 ? (
               <p className="menu-empty">Không tìm thấy món phù hợp với “{searchQuery}”.</p>
             ) : sections.map((s) => {
               const Icon = ICONS[s.id];

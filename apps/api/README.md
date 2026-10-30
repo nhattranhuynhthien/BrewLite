@@ -25,6 +25,49 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## BrewLite API
+
+The local API runs at `http://localhost:4000`; interactive Swagger documentation is available at `/api`.
+Apply pending database migrations before using the product catalog:
+
+```bash
+npx prisma migrate deploy
+```
+
+### Authentication and account
+
+| Method | Endpoint | Access | Purpose |
+|---|---|---|---|
+| `POST` | `/auth/register` | Public | Create an account with `{ "name", "email", "password" }` |
+| `POST` | `/auth/login` | Public | Sign in; returns `accessToken` and safe user details |
+| `GET` | `/auth/me` | Bearer token | Get the signed-in user profile |
+| `GET` | `/users/me` | Bearer token | Get the signed-in user profile |
+| `PATCH` | `/users/me` | Bearer token | Update the display name with `{ "name": "..." }` |
+
+Send the login token on protected routes as `Authorization: Bearer <accessToken>`.
+
+### Products and menu
+
+| Method | Endpoint | Access | Purpose |
+|---|---|---|---|
+| `GET` | `/products` | Public | List available products; optionally filter with `?category=coffee` |
+| `GET` | `/products/:id` | Public | Get an available product |
+
+Product records include `id`, `name`, `description`, `price`, `stock`, `imageUrl`, `category`, and `isAvailable`.
+The catalog migration seeds the menu categories `coffee`, `tea`, `milk-tea`, `smoothie`, and `cake`.
+
+### Orders and history
+
+| Method | Endpoint | Access | Purpose |
+|---|---|---|---|
+| `POST` | `/orders` | Bearer token | Create an order from `{ "items": [{ "productId": 1, "quantity": 2 }] }` |
+| `GET` | `/orders/me` | Bearer token | List the signed-in user's orders, newest first |
+| `GET` | `/orders/:id` | Bearer token | Get an order owned by the signed-in user |
+| `POST` | `/payments` | Bearer token | Pay an order owned by the signed-in user; send `Idempotency-Key` and `{ "orderId", "method" }` |
+
+The API derives the customer from the token and calculates prices/totals from the product catalog. A client-supplied user ID or total is not used.
+Payment amount is taken from the saved order, and payment retries with the same idempotency key return the original result.
+
 ## Project setup
 
 ```bash

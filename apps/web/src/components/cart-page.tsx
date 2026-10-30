@@ -27,10 +27,9 @@ export default function CartPage() {
       <SiteHeader
         navItems={[
           { label: 'Trang chủ', href: '/' },
-          { label: 'Menu', href: '/menu', active: true },
+          { label: 'Menu', href: '/menu' },
           { label: 'Khuyến mãi', href: '/menu#menu-promo' },
           { label: 'Giới thiệu', href: '/menu#menu-intro' },
-          { label: 'Liên hệ', href: 'mailto:contact@brewlite.vn' },
         ]}
         onSearchChange={() => {}}
         cartHref="/cart"
@@ -124,7 +123,7 @@ export default function CartPage() {
                   <p>Miễn phí giao hàng cho đơn từ {formatPrice(freeDeliveryThreshold)}<small>Áp dụng tự động cho đơn hàng của bạn.</small></p>
                 </div>
                 <Link className="cart-button cart-button--primary cart-checkout" href="/?checkout=1">
-                  <ShoppingCart aria-hidden="true" size={16} /> Tiến hành đặt hàng
+                  <ShoppingCart aria-hidden="true" size={16} /> Tiến hành thanh toán
                 </Link>
                 <div className="cart-secure-note">
                   <ShieldCheck aria-hidden="true" size={18} />

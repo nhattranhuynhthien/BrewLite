@@ -10,6 +10,7 @@ export default function Home({ searchParams }: PageProps<'/'>) {
 }
 
 async function HomeWithCheckout({ searchParams }: Pick<PageProps<'/'>, 'searchParams'>) {
-  const { checkout } = await searchParams;
-  return <Storefront initialView={checkout === '1' ? 'checkout' : 'menu'} />;
+  const { checkout, login, view } = await searchParams;
+  const initialView = checkout === '1' ? 'checkout' : view === 'orders' ? 'orders' : 'menu';
+  return <Storefront key={initialView} initialView={initialView} openLoginOnLoad={login === '1'} />;
 }

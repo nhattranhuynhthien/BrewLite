@@ -3,11 +3,13 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { JwtService } from '@nestjs/jwt';
 
 describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let testUserId: number;
+  let accessToken: string;
   let createdOrderIds: number[] = [];
 
   beforeAll(async () => {
@@ -33,6 +35,10 @@ describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
       });
     }
     testUserId = user.id;
+    accessToken = await app.get(JwtService).signAsync(
+      { sub: user.id, email: user.email },
+      { secret: 'BREWLITE_SECRET_KEY_2026' },
+    );
   });
 
   afterAll(async () => {
@@ -65,6 +71,7 @@ describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
 
     const response = await request(app.getHttpServer())
       .post('/payments')
+      .set('Authorization', `Bearer ${accessToken}`)
       .send({
         orderId,
         amount: 50000,
@@ -81,6 +88,7 @@ describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
 
     const response = await request(app.getHttpServer())
       .post('/payments')
+      .set('Authorization', `Bearer ${accessToken}`)
       .set('idempotency-key', key)
       .send({
         orderId,
@@ -105,6 +113,7 @@ describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
     // Lần 1: Gọi lần đầu
     const res1 = await request(app.getHttpServer())
       .post('/payments')
+      .set('Authorization', `Bearer ${accessToken}`)
       .set('idempotency-key', key)
       .send({
         orderId,
@@ -121,6 +130,7 @@ describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
     // Lần 2: Gửi lặp lại cùng key
     const res2 = await request(app.getHttpServer())
       .post('/payments')
+      .set('Authorization', `Bearer ${accessToken}`)
       .set('idempotency-key', key)
       .send({
         orderId,
@@ -138,4 +148,3 @@ describe('Payment Idempotency (Integration Test - Task 8 & Task 10.2)', () => {
     expect(countAfter).toBe(countBefore);
   });
 });
-

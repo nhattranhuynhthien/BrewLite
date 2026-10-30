@@ -1,8 +1,10 @@
 'use client';
 
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { Coffee, Search, ShoppingCart } from 'lucide-react';
+import { ChevronRight, ClipboardList, Coffee, LogIn, LogOut, Search, ShoppingCart, UserRound } from 'lucide-react';
 import { useSiteHeader } from '@/hooks/useSiteHeader';
+import { getAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 import '@/styles/SiteHeader.css';
 
 export type SiteHeaderNavItem = {
@@ -17,8 +19,8 @@ type SiteHeaderProps = {
   onSearchChange: (query: string) => void;
   onSearchOpen?: () => void;
   onLogin?: () => void;
-  authenticated?: boolean;
   onSignOut?: () => void;
+  onOrdersClick?: () => void;
   onCartClick?: () => void;
   cartHref?: string;
   brandHref?: string;
@@ -30,13 +32,17 @@ export default function SiteHeader({
   onSearchChange,
   onSearchOpen,
   onLogin,
-  authenticated = false,
   onSignOut,
+  onOrdersClick,
   onCartClick,
   cartHref,
   brandHref = '/',
   onBrandClick,
 }: SiteHeaderProps) {
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const accessToken = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
+  const authenticated = Boolean(accessToken);
   const {
     cartCount,
     closeSearch,
@@ -45,6 +51,33 @@ export default function SiteHeader({
     searchOpen,
     toggleSearch,
   } = useSiteHeader(onSearchChange, onSearchOpen);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !accountMenuRef.current?.contains(event.target)) {
+        setAccountMenuOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setAccountMenuOpen(false);
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [accountMenuOpen]);
+
+  function signOut() {
+    setAccountMenuOpen(false);
+    if (onSignOut) onSignOut();
+    else setAccessToken(null);
+  }
 
   return (
     <header className="site-header">
@@ -84,14 +117,79 @@ export default function SiteHeader({
             aria-label={searchOpen ? 'Đóng tìm kiếm' : 'Tìm kiếm món'}
             onClick={toggleSearch}
           ><Search aria-hidden="true" size={18} strokeWidth={1.8} /></button>
-          {authenticated
-            ? <button className="site-header__account" onClick={onSignOut} title="Đăng xuất" type="button"><span className="site-header__avatar">B</span><span className="site-header__account-label">Tài khoản</span></button>
-            : onLogin
-              ? <button className="site-header__login" onClick={onLogin} type="button">Đăng nhập</button>
-              : <Link className="site-header__login" href="/">Đăng nhập</Link>}
           {onCartClick
             ? <button className="site-header__cart" onClick={onCartClick} type="button" aria-label={`Giỏ hàng, ${cartCount} món`}><ShoppingCart aria-hidden="true" size={20} strokeWidth={1.8} /><span>{cartCount}</span></button>
             : <Link className="site-header__cart" href={cartHref ?? '/#menu'} aria-label={`Giỏ hàng, ${cartCount} món`}><ShoppingCart aria-hidden="true" size={20} strokeWidth={1.8} /><span>{cartCount}</span></Link>}
+          <div className="site-header__account-wrap" ref={accountMenuRef}>
+            <button
+              className={`site-header__account${authenticated ? ' is-authenticated' : ''}`}
+              onClick={() => setAccountMenuOpen((open) => !open)}
+              type="button"
+              aria-label={authenticated ? 'Tài khoản, đã đăng nhập' : 'Tài khoản, chưa đăng nhập'}
+              aria-haspopup="menu"
+              aria-expanded={accountMenuOpen}
+              title={authenticated ? 'Tài khoản' : 'Đăng nhập'}
+            >
+              <UserRound aria-hidden="true" size={20} strokeWidth={1.8} />
+            </button>
+            {accountMenuOpen && (
+              <div className="site-header__account-menu" role="menu">
+                {authenticated ? (
+                  <>
+                    {onOrdersClick ? (
+                      <button
+                        className="site-header__account-menu-item"
+                        onClick={() => { setAccountMenuOpen(false); onOrdersClick(); }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        <ClipboardList aria-hidden="true" size={17} />
+                        <span>Lịch sử đơn hàng</span>
+                        <ChevronRight className="site-header__account-menu-chevron" aria-hidden="true" size={15} />
+                      </button>
+                    ) : (
+                      <Link
+                        className="site-header__account-menu-item"
+                        href="/?view=orders"
+                        onClick={() => setAccountMenuOpen(false)}
+                        role="menuitem"
+                      >
+                        <ClipboardList aria-hidden="true" size={17} />
+                        <span>Lịch sử đơn hàng</span>
+                        <ChevronRight className="site-header__account-menu-chevron" aria-hidden="true" size={15} />
+                      </Link>
+                    )}
+                    <button className="site-header__account-menu-item is-destructive" onClick={signOut} role="menuitem" type="button">
+                      <LogOut aria-hidden="true" size={17} />
+                      <span>Đăng xuất</span>
+                    </button>
+                  </>
+                ) : onLogin ? (
+                  <button
+                    className="site-header__account-menu-item"
+                    onClick={() => { setAccountMenuOpen(false); onLogin(); }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <LogIn aria-hidden="true" size={17} />
+                    <span>Đăng nhập</span>
+                    <ChevronRight className="site-header__account-menu-chevron" aria-hidden="true" size={15} />
+                  </button>
+                ) : (
+                  <Link
+                    className="site-header__account-menu-item"
+                    href="/?login=1"
+                    onClick={() => setAccountMenuOpen(false)}
+                    role="menuitem"
+                  >
+                    <LogIn aria-hidden="true" size={17} />
+                    <span>Đăng nhập</span>
+                    <ChevronRight className="site-header__account-menu-chevron" aria-hidden="true" size={15} />
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>

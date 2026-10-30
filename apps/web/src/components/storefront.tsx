@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import Image from 'next/image';
+import { CalendarDays, ChevronDown, ClipboardList, CreditCard, MapPin, Search, WalletCards } from 'lucide-react';
 import { apiFetch, getAccessToken, getUserIdFromAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 import SiteHeader from '@/layouts/SiteHeader';
-import { useCartStore, type CartItem } from '@/store/cart-store';
+import ProductDetailModal from '@/components/ProductDetailModal';
+import { PRODUCTS as MENU_PRODUCTS } from '@/lib/menu-data';
+import { useCartStore } from '@/store/cart-store';
 import type { Product } from '@/types/product';
 
 type View = 'menu' | 'checkout' | 'confirmation' | 'orders';
@@ -13,49 +17,57 @@ type Order = {
   total: number;
   status: string;
   createdAt?: string;
+  items?: {
+    id: number;
+    quantity: number;
+    price: number;
+    product?: Pick<Product, 'name' | 'imageUrl'> | null;
+  }[];
+  payment?: { method: string; status: string }[];
 };
 
 const currency = (amount: number) =>
   new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
 
 const statuses: Record<string, string> = {
-  PENDING: 'Chờ thanh toán',
+  PENDING: 'Chờ xác nhận',
   PAID: 'Đã thanh toán',
   PAYMENT_FAILED: 'Thanh toán thất bại',
-  PREPARING: 'Đang pha chế',
+  PREPARING: 'Đang chuẩn bị',
   READY: 'Sẵn sàng',
-  COMPLETED: 'Hoàn tất',
+  COMPLETED: 'Đã hoàn thành',
   CANCELLED: 'Đã hủy',
 };
-
-function ProductArt({ id }: { id: number }) {
-  const art = [
-    ['☕', 'art-coffee'],
-    ['🧊', 'art-ice'],
-    ['🥛', 'art-milk'],
-    ['🍑', 'art-peach'],
-  ][(id - 1) % 4];
-  return <div className={`product-art ${art[1]}`} aria-hidden="true"><span>{art[0]}</span><i /></div>;
-}
-
 function Status({ value }: { value: string }) {
   return <span className={`status-pill status-${value.toLowerCase()}`}>{statuses[value] ?? value}</span>;
 }
 
-export default function Storefront({ initialView = 'menu' }: { initialView?: View }) {
+function formatOrderDate(value?: string) {
+  if (!value) return 'Thời gian không khả dụng';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Thời gian không khả dụng';
+  return date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+export default function Storefront({
+  initialView = 'menu',
+  openLoginOnLoad = false,
+}: {
+  initialView?: View;
+  openLoginOnLoad?: boolean;
+}) {
   const items = useCartStore((state) => state.items);
   const addItem = useCartStore((state) => state.addItem);
-  const setQuantity = useCartStore((state) => state.setQuantity);
-  const removeItem = useCartStore((state) => state.removeItem);
   const clearCart = useCartStore((state) => state.clearCart);
   const token = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [view, setView] = useState<View>(initialView);
   const [method, setMethod] = useState<PaymentMethod>('WALLET');
-  const [authOpen, setAuthOpen] = useState(false);
+  const [authOpen, setAuthOpen] = useState(openLoginOnLoad);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
@@ -65,6 +77,8 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [historyRequest, setHistoryRequest] = useState(0);
+  const [historySearch, setHistorySearch] = useState('');
+  const [expandedOrders, setExpandedOrders] = useState<Set<string> | null>(null);
   const [receipt, setReceipt] = useState<{ id: number | string; status: string } | null>(null);
   const idempotencyKey = useRef<string | null>(null);
 
@@ -72,6 +86,11 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
     if (initialView !== 'checkout' || window.location.search === '') return;
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
   }, [initialView]);
+
+  useEffect(() => {
+    if (!openLoginOnLoad) return;
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+  }, [openLoginOnLoad]);
 
   useEffect(() => {
     let active = true;
@@ -101,16 +120,32 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
 
   const filteredProducts = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase('vi');
+    const featuredProducts = products.slice(0, 16);
     return query
-      ? products.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
-      : products;
+      ? featuredProducts.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
+      : featuredProducts;
   }, [products, searchQuery]);
   const total = useMemo(
     () => items.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
     [items],
   );
-  const count = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
+  const filteredHistory = useMemo(() => {
+    const query = historySearch.trim().toLocaleLowerCase('vi');
+    return history.filter((order) => {
+      const matchesSearch = !query || String(order.id).toLocaleLowerCase('vi').includes(query);
+      return matchesSearch;
+    });
+  }, [history, historySearch]);
 
+  function toggleOrder(orderId: number | string) {
+    const key = String(orderId);
+    setExpandedOrders((expanded) => {
+      const next = new Set(expanded ?? history.map((order) => String(order.id)));
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
   async function authenticate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAuthBusy(true);
@@ -231,41 +266,20 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
     }
   }
 
-  const cart = (
-    <aside className="cart-panel" aria-label="Giỏ hàng">
-      <div className="section-heading cart-heading">
-        <div><span className="eyebrow">ĐẶT MÓN</span><h2>Giỏ hàng <span className="cart-count">{count}</span></h2></div>
-        {items.length > 0 && <button className="text-button" onClick={clearCart} type="button">Xóa hết</button>}
-      </div>
-      {items.length === 0 ? (
-        <div className="empty-cart"><span className="empty-icon" aria-hidden="true">⌑</span><strong>Giỏ hàng còn trống</strong><p>Chọn món bạn yêu thích để bắt đầu.</p></div>
-      ) : (
-        <>
-          <div className="cart-items">{items.map((item) => (
-            <CartRow key={item.product.id} item={item} changeQuantity={setQuantity} remove={removeItem} />
-          ))}</div>
-          <div className="cart-total"><span>Tạm tính</span><strong>{currency(total)}</strong></div>
-          <button className="button button-primary button-full" onClick={() => { setCheckoutError(''); setView('checkout'); }} type="button">
-            Tiến hành thanh toán <span aria-hidden="true">→</span>
-          </button>
-          <p className="secure-note">⌑ Thanh toán an toàn, không tiền mặt</p>
-        </>
-      )}
-    </aside>
-  );
-
   return (
     <>
       <SiteHeader
         navItems={[
-          { label: 'Menu', active: view === 'menu', onClick: () => setView('menu') },
-          { label: 'Đơn hàng', active: view === 'orders', onClick: openHistory },
+          { label: 'Trang chủ', href: '/', active: true },
+          { label: 'Menu', href: '/menu' },
+          { label: 'Khuyến mãi', href: '/menu#menu-promo' },
+          { label: 'Giới thiệu', href: '/menu#menu-intro' },
         ]}
         onSearchChange={setSearchQuery}
         onSearchOpen={() => setView('menu')}
         onLogin={() => { setAuthMode('login'); setAuthOpen(true); }}
-        authenticated={Boolean(token)}
         onSignOut={signOut}
+        onOrdersClick={openHistory}
         cartHref="/cart"
         brandHref="#top"
         onBrandClick={() => setView('menu')}
@@ -294,11 +308,40 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
               : productsError ? <div className="state-message state-error"><strong>Chưa thể tải thực đơn</strong><p>{productsError}</p><button className="button button-outline" onClick={() => window.location.reload()} type="button">Thử lại</button></div>
                 : products.length === 0 ? <div className="state-message">Hiện chưa có món nào trong thực đơn.</div>
                   : filteredProducts.length === 0 ? <div className="state-message">Không tìm thấy món phù hợp với “{searchQuery}”.</div>
-                  : <div className="product-grid">{filteredProducts.map((product, index) => (
+                  : <div className="product-grid">{filteredProducts.map((product) => (
                     <article className="product-card" key={product.id}>
-                      <div className="product-art-wrap">{product.id === products[0]?.id && <span className="product-tag">BÁN CHẠY</span>}<ProductArt id={product.id} />
-                        <button className="add-button" onClick={() => addItem(product)} type="button" aria-label={`Thêm ${product.name} vào giỏ`}>+</button></div>
-                      <div className="product-info"><div><h3>{product.name}</h3><p>{index % 2 === 0 ? 'Đậm đà, cân bằng' : 'Thơm dịu, dễ uống'}</p></div><strong>{currency(product.price)}</strong></div>
+                      <div className="product-art-wrap">
+                        {product.id === products[0]?.id && <span className="product-tag">BÁN CHẠY</span>}
+                        <button
+                          className="product-card__art"
+                          onClick={() => setSelectedProduct(product)}
+                          type="button"
+                          aria-label={`Xem chi tiết ${product.name}`}
+                        >
+                          <Image
+                            src={product.imageUrl || MENU_PRODUCTS.find((menuProduct) => menuProduct.id === product.id)?.imageUrl || '/img/menu/ca-phe-den-da.png'}
+                            alt={product.name}
+                            fill
+                            sizes="(max-width: 760px) 50vw, 35vw"
+                          />
+                        </button>
+                      </div>
+                      <div className="product-card__footer">
+                        <button
+                          className="product-card__detail"
+                          onClick={() => setSelectedProduct(product)}
+                          type="button"
+                          aria-label={`Xem chi tiết ${product.name}`}
+                        >
+                          <div className="product-info"><h3>{product.name}</h3><strong>{currency(product.price)}</strong></div>
+                        </button>
+                        <button
+                          className="add-button"
+                          onClick={() => setSelectedProduct(product)}
+                          type="button"
+                          aria-label={`Xem chi tiết ${product.name}`}
+                        >+</button>
+                      </div>
                     </article>
                   ))}</div>}
             <div className="promise-strip">
@@ -307,7 +350,6 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
               <div><span>♡</span><p><strong>Nhận tại cửa hàng</strong><br />Nhanh chóng, tiện lợi</p></div>
             </div>
           </div>
-          {cart}
         </section>
       </>}
 
@@ -347,16 +389,116 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
       </section>}
 
       {view === 'orders' && <section className="page-section history-section">
-        <div className="history-heading"><div><span className="eyebrow">BREWLITE CỦA BẠN</span><h1>Lịch sử đơn hàng</h1><p>Theo dõi những lần thưởng thức gần đây.</p></div><button className="button button-outline" onClick={() => setView('menu')} type="button">← Về thực đơn</button></div>
-        {!token ? <div className="history-empty"><span className="empty-icon">⌑</span><h2>Đăng nhập để xem đơn hàng</h2><p>Lịch sử đơn được lưu an toàn theo tài khoản của bạn.</p><button className="button button-primary" onClick={() => setAuthOpen(true)} type="button">Đăng nhập</button></div>
-          : historyLoading ? <div className="state-message"><span className="loader" /> Đang tải đơn hàng...</div>
-            : historyError ? <div className="state-message state-error"><strong>Chưa thể tải lịch sử</strong><p>{historyError}</p><button className="button button-outline" onClick={openHistory} type="button">Thử lại</button></div>
-              : history.length === 0 ? <div className="history-empty"><span className="empty-icon">⌑</span><h2>Chưa có đơn hàng nào</h2><p>Đơn hàng đầu tiên của bạn đang chờ được tạo.</p><button className="button button-primary" onClick={() => setView('menu')} type="button">Khám phá thực đơn</button></div>
-                : <div className="history-list">{history.map((order) => <article className="history-order" key={order.id}>
-                  <div className="history-order-top"><div><span className="eyebrow">MÃ ĐƠN</span><h2>#{order.id}</h2></div><Status value={order.status} /></div>
-                  <div className="history-order-bottom"><span>{order.createdAt ? new Date(order.createdAt).toLocaleDateString('vi-VN') : 'Ngày đặt không khả dụng'}</span><strong>{currency(order.total)}</strong></div>
-                </article>)}</div>}
+        {!token ? (
+          <div className="history-empty"><span className="empty-icon">⌑</span><h2>Đăng nhập để xem đơn hàng</h2><p>Lịch sử đơn được lưu an toàn theo tài khoản của bạn.</p><button className="button button-primary" onClick={() => setAuthOpen(true)} type="button">Đăng nhập</button></div>
+        ) : historyLoading ? (
+          <div className="state-message"><span className="loader" /> Đang tải đơn hàng...</div>
+        ) : historyError ? (
+          <div className="state-message state-error"><strong>Chưa thể tải lịch sử</strong><p>{historyError}</p><button className="button button-outline" onClick={openHistory} type="button">Thử lại</button></div>
+        ) : (
+          <>
+            <header className="history-heading">
+              <div>
+                <span className="eyebrow">BREWLITE CỦA BẠN</span>
+                <h1><ClipboardList aria-hidden="true" size={27} /> Lịch sử đơn hàng</h1>
+                <p>Theo dõi đơn hàng và xem lại những món yêu thích của bạn.</p>
+              </div>
+              <button className="button button-outline" onClick={() => setView('menu')} type="button">← Về thực đơn</button>
+            </header>
+
+            {history.length > 0 && (
+              <>
+                <div className="history-stats">
+                  <article className="history-stat"><span className="history-stat__icon"><ClipboardList size={20} /></span><div><span>Tổng đơn hàng</span><strong>{history.length}</strong></div></article>
+                  <article className="history-stat"><span className="history-stat__icon"><WalletCards size={20} /></span><div><span>Đã chi tiêu</span><strong>{currency(history.reduce((sum, order) => sum + order.total, 0))}</strong></div></article>
+                </div>
+
+                <div className="history-toolbar">
+                  <label className="history-search">
+                    <Search aria-hidden="true" size={16} />
+                    <input
+                      value={historySearch}
+                      onChange={(event) => setHistorySearch(event.target.value)}
+                      placeholder="Tìm mã đơn hàng..."
+                      aria-label="Tìm theo mã đơn hàng"
+                    />
+                  </label>
+                </div>
+
+                {filteredHistory.length === 0 ? (
+                  <div className="history-empty history-empty--filtered"><h2>Không tìm thấy đơn hàng</h2><p>Thử từ khóa tìm kiếm khác.</p></div>
+                ) : (
+                  <div className="history-list">
+                    {filteredHistory.map((order) => {
+                      const orderKey = String(order.id);
+                      const isExpanded = expandedOrders === null || expandedOrders.has(orderKey);
+                      const paymentMethod = order.payment?.[0]?.method;
+                      return (
+                        <article className={`history-order${isExpanded ? ' is-expanded' : ''}`} key={order.id}>
+                          <button
+                            className="history-order__header"
+                            onClick={() => toggleOrder(order.id)}
+                            type="button"
+                            aria-expanded={isExpanded}
+                          >
+                            <span className="history-order__id"><strong>Mã đơn:</strong> BL{String(order.id).padStart(8, '0')}</span>
+                            <span className="history-order__date"><CalendarDays size={14} /> Đặt lúc: {formatOrderDate(order.createdAt)}</span>
+                            <Status value={order.status} />
+                            <ChevronDown className="history-order__chevron" size={17} />
+                          </button>
+                          {isExpanded && (
+                            <div className="history-order__body">
+                              <div className="history-order__items">
+                                {(order.items ?? []).map((item) => (
+                                  <div className="history-item" key={item.id}>
+                                    <div className="history-item__image">
+                                      {item.product?.imageUrl && <Image src={item.product.imageUrl} alt="" fill sizes="48px" />}
+                                    </div>
+                                    <div className="history-item__details">
+                                      <strong>{item.product?.name ?? 'Sản phẩm'}</strong>
+                                      <span>Size M · SL: {item.quantity}</span>
+                                      <b>{currency(item.price * item.quantity)}</b>
+                                    </div>
+                                  </div>
+                                ))}
+                                {(order.items?.length ?? 0) === 0 && <p className="history-order__empty-items">Không có thông tin món trong đơn này.</p>}
+                              </div>
+                              <div className="history-order__delivery">
+                                <div><MapPin size={16} /><span><strong>Hình thức nhận hàng</strong><small>Nhận tại cửa hàng</small></span></div>
+                                <div><CreditCard size={16} /><span><strong>Phương thức thanh toán</strong><small>{paymentMethod === 'CARD' ? 'Thẻ ngân hàng' : paymentMethod === 'WALLET' ? 'Ví điện tử' : 'Chưa có thông tin'}</small></span></div>
+                              </div>
+                              <div className="history-order__total">
+                                <div><span>Tạm tính</span><strong>{currency(order.total)}</strong></div>
+                                <div><span>Phí giao hàng</span><strong>Miễn phí</strong></div>
+                                <div className="history-order__grand-total"><span>Tổng cộng</span><strong>{currency(order.total)}</strong></div>
+                                <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
+                              </div>
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            {history.length === 0 && <div className="history-empty"><span className="empty-icon">⌑</span><h2>Chưa có đơn hàng nào</h2><p>Đơn hàng đầu tiên của bạn đang chờ được tạo.</p><button className="button button-primary" onClick={() => setView('menu')} type="button">Khám phá thực đơn</button></div>}
+          </>
+        )}
       </section>}
+
+      {selectedProduct && (
+        <ProductDetailModal
+          key={selectedProduct.id}
+          product={selectedProduct}
+          onClose={() => setSelectedProduct(null)}
+          onAdd={(product, quantity) => {
+            addItem(product, quantity);
+            setSelectedProduct(null);
+          }}
+        />
+      )}
 
       <footer className="site-footer"><a className="brand footer-brand" href="#top"><span className="brand-mark">B</span><span>Brew<span>Lite</span></span></a><span>Cà phê tử tế, mỗi ngày.</span><span>© BrewLite 2026</span></footer>
 
@@ -378,22 +520,4 @@ export default function Storefront({ initialView = 'menu' }: { initialView?: Vie
       </main>
     </>
   );
-}
-
-function CartRow({
-  item,
-  changeQuantity,
-  remove,
-}: {
-  item: CartItem;
-  changeQuantity: (productId: number, quantity: number) => void;
-  remove: (productId: number) => void;
-}) {
-  return <div className="cart-row"><ProductArt id={item.product.id} /><div className="cart-row-content">
-    <div className="cart-row-title"><strong>{item.product.name}</strong><button aria-label={`Xóa ${item.product.name}`} className="remove-button" onClick={() => remove(item.product.id)} type="button">×</button></div>
-    <span>{currency(item.product.price)}</span><div className="quantity-control">
-      <button aria-label="Giảm số lượng" onClick={() => changeQuantity(item.product.id, item.quantity - 1)} type="button">−</button><span>{item.quantity}</span>
-      <button aria-label="Tăng số lượng" onClick={() => changeQuantity(item.product.id, item.quantity + 1)} type="button">+</button>
-    </div>
-  </div></div>;
 }

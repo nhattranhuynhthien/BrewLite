@@ -1,57 +1,60 @@
 import { NotFoundException } from '@nestjs/common';
-import { ProductsService } from './products.service';
+import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
+import { ProductsService } from './products.service';
 
 describe('ProductsService', () => {
-  let service: ProductsService;
-  let mockPrisma: any;
-
-  const sampleProducts = [
-    {
-      id: 1,
-      name: 'Cà phê sữa',
-      price: 35000,
-      imageUrl: '/images/ca-phe-sua.jpg',
-      description: null,
-      stock: 100,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+  const prisma = {
+    product: {
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
     },
-  ];
+  };
+  let service: ProductsService;
 
-  beforeEach(() => {
-    mockPrisma = {
-      product: {
-        findMany: jest.fn().mockResolvedValue(sampleProducts),
-        findUnique: jest.fn().mockImplementation(({ where }) => {
-          const found = sampleProducts.find((p) => p.id === where.id);
-          return Promise.resolve(found || null);
-        }),
-      },
-    };
-    service = new ProductsService(mockPrisma as PrismaService);
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [ProductsService, { provide: PrismaService, useValue: prisma }],
+    }).compile();
+    service = module.get<ProductsService>(ProductsService);
   });
 
-  it('returns all products', async () => {
-    const products = await service.findAll();
+  it('returns available products ordered by id', async () => {
+    prisma.product.findMany.mockResolvedValue([]);
 
-    expect(products.length).toBeGreaterThan(0);
-    expect(products[0]).toEqual(
-      expect.objectContaining({
-        id: expect.any(Number),
-        name: expect.any(String),
-        price: expect.any(Number),
-        imageUrl: expect.any(String),
-      }),
-    );
+    await service.findAll();
+
+    expect(prisma.product.findMany).toHaveBeenCalledWith({
+      where: { isAvailable: true },
+      orderBy: { id: 'asc' },
+    });
   });
 
-  it('returns one product by id', async () => {
-    const product = await service.findOne(1);
-    expect(product.id).toBe(1);
+  it('filters available products by category', async () => {
+    prisma.product.findMany.mockResolvedValue([]);
+
+    await service.findAll('coffee');
+
+    expect(prisma.product.findMany).toHaveBeenCalledWith({
+      where: { isAvailable: true, category: 'coffee' },
+      orderBy: { id: 'asc' },
+    });
   });
 
-  it('throws NotFoundException for an unknown id', async () => {
+  it('returns one available product by id', async () => {
+    const product = { id: 1, name: 'Cà phê', isAvailable: true };
+    prisma.product.findFirst.mockResolvedValue(product);
+
+    await expect(service.findOne(1)).resolves.toBe(product);
+    expect(prisma.product.findFirst).toHaveBeenCalledWith({
+      where: { id: 1, isAvailable: true },
+    });
+  });
+
+  it('throws NotFoundException for an unavailable or unknown product', async () => {
+    prisma.product.findFirst.mockResolvedValue(null);
+
     await expect(service.findOne(9999)).rejects.toThrow(NotFoundException);
   });
 });

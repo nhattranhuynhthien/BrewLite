@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import type { AuthenticatedRequest } from '../auth/authenticated-request';
 import { AuthGuard } from '../auth/auth.guard';
 import { JwtService } from '@nestjs/jwt';
-import type { AuthenticatedRequest } from '../auth/authenticated-request';
 
 describe('OrdersController', () => {
   let controller: OrdersController;
