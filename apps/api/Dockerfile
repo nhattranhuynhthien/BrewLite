@@ -8,4 +8,4 @@ COPY . .
 RUN npx prisma generate
 RUN npm run build
 EXPOSE 4000
-CMD ["npm", "run", "start:prod"]
+CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/main"]
