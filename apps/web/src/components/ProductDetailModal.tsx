@@ -3,32 +3,49 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { Minus, Plus, ShoppingCart, X } from 'lucide-react';
+import {
+  DEMO_TOPPING_OPTIONS,
+  ICE_OPTIONS,
+  SIZE_EXTRA_PRICES,
+  SWEETNESS_OPTIONS,
+  type CupSize,
+  type Ice,
+  type SelectedProductOptions,
+  type Sweetness,
+} from '@/lib/product-options';
 import type { Product } from '@/types/product';
 import '@/styles/ProductDetailModal.css';
 
-type Size = 'S' | 'M' | 'L';
-type Sweetness = 'Ít đường' | 'Bình thường' | 'Nhiều đường';
-type Ice = 'Ít đá' | 'Bình thường' | 'Không đá';
-
-const SIZE_PRICES: Record<Size, number> = { S: 0, M: 5000, L: 10000 };
-const SWEETNESS_OPTIONS: Sweetness[] = ['Ít đường', 'Bình thường', 'Nhiều đường'];
-const ICE_OPTIONS: Ice[] = ['Ít đá', 'Bình thường', 'Không đá'];
 const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
 
 interface Props {
   product: Product;
   onClose: () => void;
-  onAdd: (product: Product, quantity: number) => void;
+  onAdd: (product: Product, quantity: number, options: SelectedProductOptions) => void;
 }
 
 export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
-  const [size, setSize] = useState<Size>('M');
+  const [size, setSize] = useState<CupSize>('M');
   const [sweetness, setSweetness] = useState<Sweetness>('Bình thường');
   const [ice, setIce] = useState<Ice>('Bình thường');
+  const [selectedToppingIds, setSelectedToppingIds] = useState<number[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [note, setNote] = useState('');
-  const price = product.price + SIZE_PRICES[size];
+  const selectedToppings = DEMO_TOPPING_OPTIONS.filter(({ id }) =>
+    selectedToppingIds.includes(id),
+  );
+  const price =
+    product.price +
+    SIZE_EXTRA_PRICES[size] +
+    selectedToppings.reduce((sum, topping) => sum + topping.extraPrice, 0);
   const available = product.isAvailable && product.stock > 0;
+  const options: SelectedProductOptions = {
+    size,
+    toppings: selectedToppings,
+    sweetness,
+    ice,
+    note: note.trim(),
+  };
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -95,8 +112,34 @@ export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
                   onClick={() => setSize(option)}
                 >
                   <span>{option}</span>
-                  {SIZE_PRICES[option] > 0 && <small>+{formatPrice(SIZE_PRICES[option])}</small>}
+                  {SIZE_EXTRA_PRICES[option] > 0 && (
+                    <small>+{formatPrice(SIZE_EXTRA_PRICES[option])}</small>
+                  )}
                 </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="product-modal__group">
+            <legend>Topping</legend>
+            <div className="product-modal__choices">
+              {DEMO_TOPPING_OPTIONS.map((topping) => (
+                <label key={topping.id}>
+                  <input
+                    type="checkbox"
+                    name="toppings"
+                    value={topping.code}
+                    checked={selectedToppingIds.includes(topping.id)}
+                    onChange={(event) =>
+                      setSelectedToppingIds((current) =>
+                        event.target.checked
+                          ? [...current, topping.id]
+                          : current.filter((id) => id !== topping.id),
+                      )
+                    }
+                  />
+                  <span>{topping.name} +{formatPrice(topping.extraPrice)}</span>
+                </label>
               ))}
             </div>
           </fieldset>
@@ -175,7 +218,7 @@ export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
             type="button"
             className="product-modal__submit"
             disabled={!available}
-            onClick={() => onAdd(product, quantity)}
+            onClick={() => onAdd(product, quantity, options)}
           >
             <ShoppingCart size={20} />
             {available ? `Thêm vào giỏ hàng · ${formatPrice(price * quantity)}` : 'Tạm hết hàng'}

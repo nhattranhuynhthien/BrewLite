@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import { useCartStore } from '@/store/cart-store';
+import { getConfiguredUnitPrice } from '@/lib/product-options';
 
 export const FREE_DELIVERY_THRESHOLD = 150_000;
 export const DELIVERY_FEE = 25_000;
@@ -12,7 +13,11 @@ export function useCartPage() {
   const removeItem = useCartStore((state) => state.removeItem);
   const clearCart = useCartStore((state) => state.clearCart);
   const subtotal = useMemo(
-    () => items.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
+    () =>
+      items.reduce(
+        (sum, item) => sum + getConfiguredUnitPrice(item.product, item.options) * item.quantity,
+        0,
+      ),
     [items],
   );
   const totalQuantity = useMemo(
