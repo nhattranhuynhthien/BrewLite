@@ -5,6 +5,11 @@ import Link from 'next/link';
 import { ArrowLeft, ClipboardCheck, Minus, Plus, ShieldCheck, ShoppingCart, Trash2, Truck } from 'lucide-react';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useCartPage } from '@/hooks/useCartPage';
+import {
+  getCartItemKey,
+  getConfiguredUnitPrice,
+  normalizeProductOptions,
+} from '@/lib/product-options';
 import '@/styles/CartPage.css';
 
 const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
@@ -67,41 +72,53 @@ export default function CartPage() {
               </div>
 
               <div className="cart-items-list">
-                {items.map(({ product, quantity }) => (
-                  <article className="cart-item" key={product.id}>
-                    <div className="cart-item__image">
-                      {product.imageUrl
-                        ? <Image src={product.imageUrl} alt={product.name} fill sizes="80px" />
-                        : <Image src="/img/product-placeholder.svg" alt="" fill sizes="80px" />}
-                    </div>
-                    <div className="cart-item__details">
-                      <h3>{product.name}</h3>
-                      <p>{product.description || 'Pha mới mỗi ngày'}</p>
-                      <strong>{formatPrice(product.price)}</strong>
-                    </div>
-                    <div className="cart-quantity" aria-label={`Số lượng ${product.name}`}>
+                {items.map((item) => {
+                  const { product, quantity } = item;
+                  const options = normalizeProductOptions(item.options);
+                  const itemKey = getCartItemKey(product.id, item.options);
+                  const unitPrice = getConfiguredUnitPrice(product, item.options);
+                  const selectedToppings = options.toppings.map(({ name }) => name).join(', ');
+                  return (
+                    <article className="cart-item" key={itemKey}>
+                      <div className="cart-item__image">
+                        {product.imageUrl
+                          ? <Image src={product.imageUrl} alt={product.name} fill sizes="80px" />
+                          : <Image src="/img/product-placeholder.svg" alt="" fill sizes="80px" />}
+                      </div>
+                      <div className="cart-item__details">
+                        <h3>{product.name}</h3>
+                        <p>
+                          Size {options.size}
+                          {selectedToppings ? ` · ${selectedToppings}` : ''}
+                          {` · ${options.sweetness} · ${options.ice}`}
+                          {options.note ? ` · Ghi chú: ${options.note}` : ''}
+                        </p>
+                        <strong>{formatPrice(unitPrice)}</strong>
+                      </div>
+                      <div className="cart-quantity" aria-label={`Số lượng ${product.name}`}>
+                        <button
+                          aria-label={`Giảm số lượng ${product.name}`}
+                          onClick={() => setQuantity(itemKey, quantity - 1)}
+                          type="button"
+                        ><Minus aria-hidden="true" size={13} /></button>
+                        <span>{quantity}</span>
+                        <button
+                          aria-label={`Tăng số lượng ${product.name}`}
+                          disabled={quantity >= product.stock}
+                          onClick={() => setQuantity(itemKey, quantity + 1)}
+                          type="button"
+                        ><Plus aria-hidden="true" size={13} /></button>
+                      </div>
+                      <strong className="cart-item__total">{formatPrice(unitPrice * quantity)}</strong>
                       <button
-                        aria-label={`Giảm số lượng ${product.name}`}
-                        onClick={() => setQuantity(product.id, quantity - 1)}
+                        className="cart-item__remove"
+                        aria-label={`Xóa ${product.name} khỏi giỏ`}
+                        onClick={() => removeItem(itemKey)}
                         type="button"
-                      ><Minus aria-hidden="true" size={13} /></button>
-                      <span>{quantity}</span>
-                      <button
-                        aria-label={`Tăng số lượng ${product.name}`}
-                        disabled={quantity >= product.stock}
-                        onClick={() => setQuantity(product.id, quantity + 1)}
-                        type="button"
-                      ><Plus aria-hidden="true" size={13} /></button>
-                    </div>
-                    <strong className="cart-item__total">{formatPrice(product.price * quantity)}</strong>
-                    <button
-                      className="cart-item__remove"
-                      aria-label={`Xóa ${product.name} khỏi giỏ`}
-                      onClick={() => removeItem(product.id)}
-                      type="button"
-                    ><Trash2 aria-hidden="true" size={16} /></button>
-                  </article>
-                ))}
+                      ><Trash2 aria-hidden="true" size={16} /></button>
+                    </article>
+                  );
+                })}
               </div>
 
               <Link className="cart-continue" href="/menu">

@@ -493,8 +493,8 @@ export default function Storefront({
           key={selectedProduct.id}
           product={selectedProduct}
           onClose={() => setSelectedProduct(null)}
-          onAdd={(product, quantity) => {
-            addItem(product, quantity);
+          onAdd={(product, quantity, options) => {
+            addItem(product, quantity, options);
             setSelectedProduct(null);
           }}
         />
