@@ -2,9 +2,10 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, ClipboardCheck, Minus, Plus, ShieldCheck, ShoppingCart, Trash2, Truck } from 'lucide-react';
+import { ArrowLeft, ClipboardCheck, Minus, Plus, ShieldCheck, ShoppingCart, Trash2 } from 'lucide-react';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useCartPage } from '@/hooks/useCartPage';
+import { getCartItemKey, getCartOptions } from '@/store/cart-store';
 import '@/styles/CartPage.css';
 
 const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
@@ -12,8 +13,6 @@ const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
 export default function CartPage() {
   const {
     clearCart,
-    deliveryFee,
-    freeDeliveryThreshold,
     items,
     removeItem,
     setQuantity,
@@ -67,41 +66,48 @@ export default function CartPage() {
               </div>
 
               <div className="cart-items-list">
-                {items.map(({ product, quantity }) => (
-                  <article className="cart-item" key={product.id}>
-                    <div className="cart-item__image">
-                      {product.imageUrl
-                        ? <Image src={product.imageUrl} alt={product.name} fill sizes="80px" />
-                        : <Image src="/img/product-placeholder.svg" alt="" fill sizes="80px" />}
-                    </div>
-                    <div className="cart-item__details">
-                      <h3>{product.name}</h3>
-                      <p>{product.description || 'Pha mới mỗi ngày'}</p>
-                      <strong>{formatPrice(product.price)}</strong>
-                    </div>
-                    <div className="cart-quantity" aria-label={`Số lượng ${product.name}`}>
+                {items.map((item) => {
+                  const { product, quantity } = item;
+                  const options = getCartOptions(item);
+                  const itemKey = getCartItemKey(item);
+                  return (
+                    <article className="cart-item" key={itemKey}>
+                      <div className="cart-item__image">
+                        {product.imageUrl
+                          ? <Image src={product.imageUrl} alt={product.name} fill sizes="80px" />
+                          : <Image src="/img/product-placeholder.svg" alt="" fill sizes="80px" />}
+                      </div>
+                      <div className="cart-item__details">
+                        <h3>{product.name}</h3>
+                        <p>{product.description || 'Pha mới mỗi ngày'}</p>
+                        <span className="cart-item__options">Size {options.size} · {options.sweetness} · {options.ice}</span>
+                        {options.note && <span className="cart-item__note">Ghi chú: {options.note}</span>}
+                        <strong>{formatPrice(product.price)}</strong>
+                      </div>
+                      <div className="cart-quantity" aria-label={`Số lượng ${product.name}`}>
+                        <button
+                          aria-label={`Giảm số lượng ${product.name}`}
+                          onClick={() => setQuantity(itemKey, quantity - 1)}
+                          type="button"
+                        ><Minus aria-hidden="true" size={13} /></button>
+                        <span>{quantity}</span>
+                        <button
+                          aria-label={`Tăng số lượng ${product.name}`}
+                          disabled={quantity >= product.stock}
+                          onClick={() => setQuantity(itemKey, quantity + 1)}
+                          type="button"
+                        ><Plus aria-hidden="true" size={13} /></button>
+                      </div>
+                      <strong className="cart-item__total">{formatPrice(product.price * quantity)}</strong>
                       <button
-                        aria-label={`Giảm số lượng ${product.name}`}
-                        onClick={() => setQuantity(product.id, quantity - 1)}
+                        className="cart-item__remove"
+                        aria-label={`Xóa ${product.name} khỏi giỏ`}
+                        onClick={() => removeItem(itemKey)}
                         type="button"
-                      ><Minus aria-hidden="true" size={13} /></button>
-                      <span>{quantity}</span>
-                      <button
-                        aria-label={`Tăng số lượng ${product.name}`}
-                        disabled={quantity >= product.stock}
-                        onClick={() => setQuantity(product.id, quantity + 1)}
-                        type="button"
-                      ><Plus aria-hidden="true" size={13} /></button>
-                    </div>
-                    <strong className="cart-item__total">{formatPrice(product.price * quantity)}</strong>
-                    <button
-                      className="cart-item__remove"
-                      aria-label={`Xóa ${product.name} khỏi giỏ`}
-                      onClick={() => removeItem(product.id)}
-                      type="button"
-                    ><Trash2 aria-hidden="true" size={16} /></button>
-                  </article>
-                ))}
+                      ><Trash2 aria-hidden="true" size={16} /></button>
+                    </article>
+                  );
+                })}
               </div>
 
               <Link className="cart-continue" href="/menu">
@@ -115,13 +121,8 @@ export default function CartPage() {
                 <dl className="cart-summary__rows">
                   <div><dt>Tạm tính ({totalQuantity} món)</dt><dd>{formatPrice(subtotal)}</dd></div>
                   <div><dt>Giảm giá</dt><dd>{formatPrice(0)}</dd></div>
-                  <div><dt>Phí giao hàng</dt><dd>{deliveryFee === 0 ? 'Miễn phí' : formatPrice(deliveryFee)}</dd></div>
                 </dl>
                 <div className="cart-summary__total"><strong>Tổng cộng</strong><strong>{formatPrice(total)}</strong></div>
-                <div className="cart-delivery-note">
-                  <Truck aria-hidden="true" size={18} />
-                  <p>Miễn phí giao hàng cho đơn từ {formatPrice(freeDeliveryThreshold)}<small>Áp dụng tự động cho đơn hàng của bạn.</small></p>
-                </div>
                 <Link className="cart-button cart-button--primary cart-checkout" href="/?checkout=1">
                   <ShoppingCart aria-hidden="true" size={16} /> Tiến hành thanh toán
                 </Link>

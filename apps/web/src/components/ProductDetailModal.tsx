@@ -3,14 +3,14 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { Minus, Plus, ShoppingCart, X } from 'lucide-react';
+import type { CartOptions, CartSize } from '@/store/cart-store';
 import type { Product } from '@/types/product';
 import '@/styles/ProductDetailModal.css';
 
-type Size = 'S' | 'M' | 'L';
 type Sweetness = 'Ít đường' | 'Bình thường' | 'Nhiều đường';
 type Ice = 'Ít đá' | 'Bình thường' | 'Không đá';
 
-const SIZE_PRICES: Record<Size, number> = { S: 0, M: 5000, L: 10000 };
+const SIZE_PRICES: Record<CartSize, number> = { S: 0, M: 5000, L: 10000 };
 const SWEETNESS_OPTIONS: Sweetness[] = ['Ít đường', 'Bình thường', 'Nhiều đường'];
 const ICE_OPTIONS: Ice[] = ['Ít đá', 'Bình thường', 'Không đá'];
 const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
@@ -18,11 +18,11 @@ const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
 interface Props {
   product: Product;
   onClose: () => void;
-  onAdd: (product: Product, quantity: number) => void;
+  onAdd: (product: Product, quantity: number, options: CartOptions) => void;
 }
 
 export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
-  const [size, setSize] = useState<Size>('M');
+  const [size, setSize] = useState<CartSize>('M');
   const [sweetness, setSweetness] = useState<Sweetness>('Bình thường');
   const [ice, setIce] = useState<Ice>('Bình thường');
   const [quantity, setQuantity] = useState(1);
@@ -175,7 +175,7 @@ export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
             type="button"
             className="product-modal__submit"
             disabled={!available}
-            onClick={() => onAdd(product, quantity)}
+            onClick={() => onAdd(product, quantity, { size, sweetness, ice, note: note.trim() })}
           >
             <ShoppingCart size={20} />
             {available ? `Thêm vào giỏ hàng · ${formatPrice(price * quantity)}` : 'Tạm hết hàng'}

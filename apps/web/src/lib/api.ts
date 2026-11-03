@@ -2,6 +2,13 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').rep
 const ACCESS_TOKEN_KEY = 'brewlite_access_token';
 const AUTH_CHANGE_EVENT = 'brewlite:auth-change';
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export function getAccessToken(): string | null {
   return typeof window === 'undefined' ? null : window.localStorage.getItem(ACCESS_TOKEN_KEY);
 }
@@ -57,7 +64,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
         message = body;
       }
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

@@ -20,6 +20,7 @@ const PHOTO_IMAGES = new Set([
   'tra-tac',
   'tra-xanh-matcha',
   'tra-o-long',
+  'banh-bong-lan-trung-muoi',
 ]);
 
 const img = (name: string) => `/img/menu/${name}.${PHOTO_IMAGES.has(name) ? 'png' : 'svg'}`;

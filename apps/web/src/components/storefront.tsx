@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import Image from 'next/image';
 import { CalendarDays, ChevronDown, ClipboardList, CreditCard, MapPin, Search, WalletCards } from 'lucide-react';
-import { apiFetch, getAccessToken, getUserIdFromAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
+import { ApiError, apiFetch, getAccessToken, getUserIdFromAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 import SiteHeader from '@/layouts/SiteHeader';
 import ProductDetailModal from '@/components/ProductDetailModal';
 import { PRODUCTS as MENU_PRODUCTS } from '@/lib/menu-data';
-import { useCartStore } from '@/store/cart-store';
+import { getCartItemKey, getCartOptions, useCartStore } from '@/store/cart-store';
 import type { Product } from '@/types/product';
 
 type View = 'menu' | 'checkout' | 'confirmation' | 'orders';
@@ -74,7 +74,7 @@ export default function Storefront({
   const [checkoutError, setCheckoutError] = useState('');
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [history, setHistory] = useState<Order[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(initialView === 'orders');
   const [historyError, setHistoryError] = useState('');
   const [historyRequest, setHistoryRequest] = useState(0);
   const [historySearch, setHistorySearch] = useState('');
@@ -112,7 +112,15 @@ export default function Storefront({
         if (active) setHistory(Array.isArray(data) ? data : data.orders);
       })
       .catch((error: unknown) => {
-        if (active) setHistoryError(error instanceof Error ? error.message : 'Không thể tải lịch sử đơn.');
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 401) {
+          setAccessToken(null);
+          setAuthMode('login');
+          setAuthError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+          setAuthOpen(true);
+          return;
+        }
+        setHistoryError(error instanceof Error ? error.message : 'Không thể tải lịch sử đơn.');
       })
       .finally(() => { if (active) setHistoryLoading(false); });
     return () => { active = false; };
@@ -169,6 +177,11 @@ export default function Storefront({
         body: JSON.stringify({ email, password }),
       });
       if (!result.accessToken) throw new Error('API đăng nhập không trả về access token.');
+      if (view === 'orders') {
+        setHistory([]);
+        setHistoryLoading(true);
+        setHistoryError('');
+      }
       setAccessToken(result.accessToken);
       setAuthOpen(false);
     } catch (error) {
@@ -372,7 +385,16 @@ export default function Storefront({
             <p className="terms-copy">Bằng việc tiếp tục, bạn đồng ý với điều khoản sử dụng của BrewLite.</p>
           </div>
           <aside className="order-summary"><h2>Đơn hàng của bạn <span>{items.length} món</span></h2>
-            {items.map((item) => <div className="summary-row" key={item.product.id}><span className="summary-quantity">{item.quantity}×</span><span className="summary-name">{item.product.name}</span><strong>{currency(item.product.price * item.quantity)}</strong></div>)}
+            {items.map((item) => {
+              const options = getCartOptions(item);
+              return (
+                <div className="summary-row" key={getCartItemKey(item)}>
+                  <span className="summary-quantity">{item.quantity}×</span>
+                  <span className="summary-name">{item.product.name} · Size {options.size}{options.note && ` · Ghi chú: ${options.note}`}</span>
+                  <strong>{currency(item.product.price * item.quantity)}</strong>
+                </div>
+              );
+            })}
             <div className="summary-total"><span>Tổng thanh toán</span><strong>{currency(total)}</strong></div>
           </aside>
         </div>
@@ -469,7 +491,6 @@ export default function Storefront({
                               </div>
                               <div className="history-order__total">
                                 <div><span>Tạm tính</span><strong>{currency(order.total)}</strong></div>
-                                <div><span>Phí giao hàng</span><strong>Miễn phí</strong></div>
                                 <div className="history-order__grand-total"><span>Tổng cộng</span><strong>{currency(order.total)}</strong></div>
                                 <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
                               </div>
@@ -493,8 +514,8 @@ export default function Storefront({
           key={selectedProduct.id}
           product={selectedProduct}
           onClose={() => setSelectedProduct(null)}
-          onAdd={(product, quantity) => {
-            addItem(product, quantity);
+          onAdd={(product, quantity, options) => {
+            addItem(product, quantity, options);
             setSelectedProduct(null);
           }}
         />
