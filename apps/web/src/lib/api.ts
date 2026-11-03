@@ -1,4 +1,4 @@
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:4000').replace(/\/$/, '');
 const ACCESS_TOKEN_KEY = 'brewlite_access_token';
 const AUTH_CHANGE_EVENT = 'brewlite:auth-change';
 
@@ -48,14 +48,16 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   if (!response.ok) {
     const body = await response.text();
     let message = `Yêu cầu thất bại (${response.status})`;
-    if (body) {
+    if (body && response.headers.get('content-type')?.includes('application/json')) {
       try {
         const error = JSON.parse(body) as { message?: string | string[]; error?: string };
         const detail = error.message ?? error.error;
-        message = Array.isArray(detail) ? detail.join(', ') : detail ?? body;
+        message = Array.isArray(detail) ? detail.join(', ') : detail ?? message;
       } catch {
-        message = body;
+        // Keep the status message if the server returns malformed JSON.
       }
+    } else if (body) {
+      message = `API trả về phản hồi không hợp lệ (${response.status}). Vui lòng kiểm tra URL backend.`;
     }
     throw new Error(message);
   }
