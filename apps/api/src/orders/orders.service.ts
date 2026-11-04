@@ -3,6 +3,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertTransition } from './order-status';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class OrdersService {
@@ -15,7 +16,7 @@ export class OrdersService {
 
     return await this.prisma.$transaction(async (tx) => {
       let calculatedTotal = 0;
-      const orderItemsData = [];
+      const orderItemsData: Prisma.OrderItemCreateWithoutOrderInput[] = [];
 
       // 1. Kiểm tra tồn kho sơ bộ và trừ tồn kho nguyên tử (Optimistic Locking)
       for (const item of createOrderDto.items) {
@@ -51,20 +52,15 @@ export class OrdersService {
           );
         }
 
-        // ==========================================
-        // LOGIC TÍNH GIÁ CHÍNH XÁC (SOURCE OF TRUTH)
-        // ==========================================
         let itemUnitPrice = product.price;
 
-        // Tính phụ phí Size
         if (item.size === 'M') {
           itemUnitPrice += 5000;
         } else if (item.size === 'L') {
           itemUnitPrice += 10000;
         }
 
-        // Tạo object payload cơ bản cho OrderItem (chưa gồm toppings nếu không có)
-        const orderItemPayload: any = {
+        const orderItemPayload: Prisma.OrderItemCreateWithoutOrderInput = {
           quantity: item.quantity,
           size: item.size || null,
           note: item.note || null,
@@ -74,8 +70,7 @@ export class OrdersService {
           },
         };
 
-        // Chỉ xử lý và gán trường toppings nếu mảng toppingIds có chứa phần tử thực sự
-        if (item.toppingIds && Array.isArray(item.toppingIds) && item.toppingIds.length > 0) {
+        if (item.toppingIds?.length) {
           const toppings = await tx.topping.findMany({
             where: { id: { in: item.toppingIds } },
           });
@@ -84,21 +79,16 @@ export class OrdersService {
             throw new BadRequestException(`Một hoặc nhiều Topping cho món "${product.name}" không hợp lệ.`);
           }
 
-          const toppingsTotal = toppings.reduce((sum: number, t: any) => sum + t.price, 0);
+          const toppingsTotal = toppings.reduce((sum, topping) => sum + topping.price, 0);
           itemUnitPrice += toppingsTotal;
-          
-          // Cập nhật lại unitPrice chuẩn sau khi cộng topping
           orderItemPayload.unitPrice = itemUnitPrice;
-          
-          // Gán mảng JSON chi tiết topping
-          orderItemPayload.toppings = toppings.map((t: any) => ({ id: t.id, name: t.name, price: t.price }));
+          orderItemPayload.toppings = toppings.map(({ id, name, price }) => ({ id, name, price }));
         }
 
-        // Cộng dồn vào tổng tiền đơn hàng
         calculatedTotal += itemUnitPrice * item.quantity;
 
         orderItemsData.push(orderItemPayload);
-      } // <-- ĐÃ ĐÓNG VÒNG LẶP FOR Ở ĐÂY CHÍNH XÁC!
+      }
 
       // 2. Kiểm tra Voucher giảm giá
       let promoToUpdate: number | null = null;
@@ -134,18 +124,24 @@ export class OrdersService {
 
       // 4. Trừ lượt dùng voucher
       if (promoToUpdate) {
-        await tx.promotion.update({
-          where: { id: promoToUpdate },
+        const promoUpdate = await tx.promotion.updateMany({
+          where: { id: promoToUpdate, usageLimit: { gt: 0 } },
           data: { usageLimit: { decrement: 1 } },
         });
+        if (promoUpdate.count !== 1) {
+          throw new ConflictException('Mã giảm giá vừa hết lượt sử dụng. Vui lòng thử lại!');
+        }
       }
 
       // 5. Trừ điểm của người dùng
       if (createOrderDto.pointsToUse) {
-        await tx.user.update({
-          where: { id: userId },
+        const pointsUpdate = await tx.user.updateMany({
+          where: { id: userId, rewardPoints: { gte: createOrderDto.pointsToUse } },
           data: { rewardPoints: { decrement: createOrderDto.pointsToUse } },
         });
+        if (pointsUpdate.count !== 1) {
+          throw new ConflictException('Số dư điểm thưởng vừa thay đổi. Vui lòng thử lại!');
+        }
       }
 
       // 6. Tạo đơn hàng với các Option đã chốt giá
