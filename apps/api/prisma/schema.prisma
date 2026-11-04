@@ -54,13 +54,16 @@ model Order {
 }
 
 model OrderItem {
-  id        Int     @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   orderId   Int
-  order     Order   @relation(fields: [orderId], references: [id])
   productId Int
-  product   Product @relation(fields: [productId], references: [id])
   quantity  Int
-  price     Float
+  size      String?  // VD: "S", "M", "L"
+  toppings  Json?    // Lưu mảng ID hoặc tên topping kèm giá: [{"id": 1, "name": "Trân châu", "price": 5000}]
+  note      String?  @db.VarChar(255)
+  unitPrice Float    // Giá chốt tại thời điểm đặt = giá gốc + size + topping
+  order     Order    @relation(fields: [orderId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
 }
 
 model Payment {
@@ -78,4 +81,9 @@ model ProcPaymentKey {
   key       String   @unique // Lưu khóa Idempotency-Key từ client
   response  String // Lưu kết quả JSON trả về
   createdAt DateTime @default(now())
+}
+model Topping {
+  id    Int    @id @default(autoincrement())
+  name  String
+  price Float
 }

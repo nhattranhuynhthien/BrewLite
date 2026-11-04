@@ -29,24 +29,19 @@ export class OrdersService {
         if (!product.isAvailable) {
           throw new BadRequestException(`Sản phẩm "${product.name}" hiện không khả dụng.`);
         }
-
-        // Kiểm tra tồn kho sơ bộ
         if (product.stock < item.quantity) {
           throw new BadRequestException(
             `Sản phẩm "${product.name}" không đủ hàng. Chỉ còn lại ${product.stock} sản phẩm.`,
           );
         }
 
-        // Thực hiện Optimistic Locking / Atomic Update qua updateMany với điều kiện stock >= quantity
         const updateResult = await tx.product.updateMany({
           where: {
             id: Number(item.productId),
             stock: { gte: item.quantity },
           },
           data: {
-            stock: {
-              decrement: item.quantity,
-            },
+            stock: { decrement: item.quantity },
           },
         });
 
@@ -56,14 +51,54 @@ export class OrdersService {
           );
         }
 
-        calculatedTotal += product.price * item.quantity;
+        // ==========================================
+        // LOGIC TÍNH GIÁ CHÍNH XÁC (SOURCE OF TRUTH)
+        // ==========================================
+        let itemUnitPrice = product.price;
 
-        orderItemsData.push({
-          productId: Number(item.productId),
+        // Tính phụ phí Size
+        if (item.size === 'M') {
+          itemUnitPrice += 5000;
+        } else if (item.size === 'L') {
+          itemUnitPrice += 10000;
+        }
+
+        // Tạo object payload cơ bản cho OrderItem (chưa gồm toppings nếu không có)
+        const orderItemPayload: any = {
           quantity: item.quantity,
-          price: product.price,
-        });
-      }
+          size: item.size || null,
+          note: item.note || null,
+          unitPrice: itemUnitPrice,
+          product: {
+            connect: { id: Number(item.productId) },
+          },
+        };
+
+        // Chỉ xử lý và gán trường toppings nếu mảng toppingIds có chứa phần tử thực sự
+        if (item.toppingIds && Array.isArray(item.toppingIds) && item.toppingIds.length > 0) {
+          const toppings = await tx.topping.findMany({
+            where: { id: { in: item.toppingIds } },
+          });
+
+          if (toppings.length !== item.toppingIds.length) {
+            throw new BadRequestException(`Một hoặc nhiều Topping cho món "${product.name}" không hợp lệ.`);
+          }
+
+          const toppingsTotal = toppings.reduce((sum: number, t: any) => sum + t.price, 0);
+          itemUnitPrice += toppingsTotal;
+          
+          // Cập nhật lại unitPrice chuẩn sau khi cộng topping
+          orderItemPayload.unitPrice = itemUnitPrice;
+          
+          // Gán mảng JSON chi tiết topping
+          orderItemPayload.toppings = toppings.map((t: any) => ({ id: t.id, name: t.name, price: t.price }));
+        }
+
+        // Cộng dồn vào tổng tiền đơn hàng
+        calculatedTotal += itemUnitPrice * item.quantity;
+
+        orderItemsData.push(orderItemPayload);
+      } // <-- ĐÃ ĐÓNG VÒNG LẶP FOR Ở ĐÂY CHÍNH XÁC!
 
       // 2. Kiểm tra Voucher giảm giá
       let promoToUpdate: number | null = null;
@@ -91,14 +126,13 @@ export class OrdersService {
           throw new BadRequestException('Tài khoản không đủ điểm thưởng để áp dụng');
         }
 
-        const pointDiscount = createOrderDto.pointsToUse * 1000; // 1 điểm = 1.000 VNĐ
+        const pointDiscount = createOrderDto.pointsToUse * 1000;
         calculatedTotal -= pointDiscount;
       }
 
-      // Đảm bảo tổng tiền không bị âm
       if (calculatedTotal < 0) calculatedTotal = 0;
 
-      // 4. Trừ lượt dùng của voucher (nếu có)
+      // 4. Trừ lượt dùng voucher
       if (promoToUpdate) {
         await tx.promotion.update({
           where: { id: promoToUpdate },
@@ -106,7 +140,7 @@ export class OrdersService {
         });
       }
 
-      // 5. Trừ điểm của người dùng (nếu có)
+      // 5. Trừ điểm của người dùng
       if (createOrderDto.pointsToUse) {
         await tx.user.update({
           where: { id: userId },
@@ -114,7 +148,7 @@ export class OrdersService {
         });
       }
 
-      // 6. Tạo đơn hàng mới
+      // 6. Tạo đơn hàng với các Option đã chốt giá
       const newOrder = await tx.order.create({
         data: {
           userId: userId,

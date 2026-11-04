@@ -36,6 +36,26 @@ async function main() {
     },
   });
 
+  // Khởi tạo dữ liệu Topping
+  console.log('Bắt đầu tạo dữ liệu Topping...');
+  const toppingsData = [
+    { id: 1, name: 'Trân châu đen', price: 5000 },
+    { id: 2, name: 'Trân châu trắng', price: 5000 },
+    { id: 3, name: 'Thạch trái cây', price: 8000 },
+    { id: 4, name: 'Kem phô mai (Macchiato)', price: 10000 },
+    { id: 5, name: 'Pudding trứng', price: 7000 },
+    { id: 6, name: 'Thạch sương sáo', price: 5000 },
+    { id: 7, name: 'Thạch dừa', price: 5000 },
+  ];
+
+  for (const topping of toppingsData) {
+    await prisma.topping.upsert({
+      where: { id: topping.id },
+      update: {},
+      create: topping,
+    });
+  }
+
   console.log('Seed completed successfully!');
 }
 
@@ -47,4 +67,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-

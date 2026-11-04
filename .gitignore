@@ -24,4 +24,5 @@ out/
 *.log
 *.tsbuildinfo
 /mydocs
+/frontend
 
