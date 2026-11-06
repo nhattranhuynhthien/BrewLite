@@ -11,6 +11,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
   let jwtService: JwtService;
   let testUserId: number;
   let testProductId: number;
+  let testToppingId: number;
   let authToken: string;
 
   beforeAll(async () => {
@@ -60,6 +61,17 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
     });
     testProductId = product.id;
 
+    await prisma.$queryRaw`
+      SELECT setval(
+        pg_get_serial_sequence('"Topping"', 'id'),
+        COALESCE((SELECT MAX("id") FROM "Topping"), 1)
+      )
+    `;
+    const topping = await prisma.topping.create({
+      data: { name: `Test topping-${Date.now()}`, price: 5000 },
+    });
+    testToppingId = topping.id;
+
     // Chuẩn bị Voucher giảm giá: giảm 20%, tối đa 30.000đ, 2 lượt dùng
     await prisma.promotion.upsert({
       where: { code: 'TESTGIAM20' },
@@ -77,6 +89,9 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
     if (testProductId) {
       await prisma.orderItem.deleteMany({ where: { productId: testProductId } });
       await prisma.product.deleteMany({ where: { id: testProductId } });
+    }
+    if (testToppingId) {
+      await prisma.topping.deleteMany({ where: { id: testToppingId } });
     }
     if (testUserId) {
       const orders = await prisma.order.findMany({ where: { userId: testUserId } });
@@ -149,8 +164,9 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
       .set('Authorization', `Bearer ${authToken}`)
       .send({
         items: [{ productId: testProductId, quantity: 1 }],
-        pointsToUse: 40, // Dùng 40 điểm (vượt quá) -> Nên không dùng điểm để tổng là 100k
+        pointsToUse: 40,
       });
+    expect(orderRes.status).toBe(400);
     // Tạo đơn sạch không dùng điểm: 100.000đ
     const cleanOrderRes = await request(app.getHttpServer())
       .post('/orders')
@@ -165,6 +181,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
     // Thanh toán đơn 100.000đ -> Kỳ vọng tích 10 điểm
     const payRes = await request(app.getHttpServer())
       .post('/payments')
+      .set('Authorization', `Bearer ${authToken}`)
       .set('idempotency-key', paymentKey)
       .send({
         orderId,
@@ -178,5 +195,97 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
     // Kiểm tra điểm user đã tăng thêm 10 (từ 5 ban đầu lên 15)
     const user = await prisma.user.findUnique({ where: { id: testUserId } });
     expect(user?.rewardPoints).toBe(15);
+  });
+
+  it('5. Lưu tùy chọn và tính giá từ dữ liệu backend, không lấy giá client', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/orders')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        items: [{
+          productId: testProductId,
+          quantity: 1,
+          size: 'L',
+          toppingIds: [testToppingId],
+          note: 'Ít đá',
+          price: 1,
+        }],
+      });
+
+    expect([200, 201]).toContain(response.status);
+    expect(response.body.order.total).toBe(115000);
+    expect(response.body.order.items[0]).toMatchObject({
+      size: 'L',
+      note: 'Ít đá',
+      unitPrice: 115000,
+      toppings: [{ id: testToppingId, price: 5000 }],
+    });
+  });
+
+  it('6. Từ chối size không được hỗ trợ trước khi trừ tồn kho', async () => {
+    const stockBefore = (await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock;
+    const response = await request(app.getHttpServer())
+      .post('/orders')
+      .set('Authorization', `Bearer ${authToken}`)
+      .send({
+        items: [{ productId: testProductId, quantity: 1, size: 'XXL' }],
+      });
+
+    expect(response.status).toBe(400);
+    expect((await prisma.product.findUnique({ where: { id: testProductId } }))?.stock).toBe(stockBefore);
+  });
+
+  it('7. Chỉ một request đồng thời dùng được lượt voucher cuối cùng', async () => {
+    await prisma.promotion.update({
+      where: { code: 'TESTGIAM20' },
+      data: { usageLimit: 1 },
+    });
+    const ordersBefore = await prisma.order.count({ where: { userId: testUserId } });
+    const stockBefore = (await prisma.product.findUnique({ where: { id: testProductId } }))?.stock;
+
+    const responses = await Promise.all([
+      request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ items: [{ productId: testProductId, quantity: 1 }], voucherCode: 'TESTGIAM20' }),
+      request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ items: [{ productId: testProductId, quantity: 1 }], voucherCode: 'TESTGIAM20' }),
+    ]);
+
+    expect(responses.filter((response) => [200, 201].includes(response.status))).toHaveLength(1);
+    expect(responses.filter((response) => [400, 409].includes(response.status))).toHaveLength(1);
+    expect(responses.every((response) => [200, 201, 400, 409].includes(response.status))).toBe(true);
+    expect((await prisma.promotion.findUnique({ where: { code: 'TESTGIAM20' } }))?.usageLimit).toBe(0);
+    expect(await prisma.order.count({ where: { userId: testUserId } })).toBe(ordersBefore + 1);
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock).toBe(stockBefore - 1);
+  });
+
+  it('8. Chỉ một request đồng thời dùng được số điểm còn lại', async () => {
+    await prisma.user.update({
+      where: { id: testUserId },
+      data: { rewardPoints: 5 },
+    });
+    const ordersBefore = await prisma.order.count({ where: { userId: testUserId } });
+    const stockBefore = (await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock;
+
+    const responses = await Promise.all([
+      request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ items: [{ productId: testProductId, quantity: 1 }], pointsToUse: 5 }),
+      request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ items: [{ productId: testProductId, quantity: 1 }], pointsToUse: 5 }),
+    ]);
+
+    expect(responses.filter((response) => [200, 201].includes(response.status))).toHaveLength(1);
+    expect(responses.filter((response) => [400, 409].includes(response.status))).toHaveLength(1);
+    expect(responses.every((response) => [200, 201, 400, 409].includes(response.status))).toBe(true);
+    expect((await prisma.user.findUnique({ where: { id: testUserId } }))?.rewardPoints).toBe(0);
+    expect(await prisma.order.count({ where: { userId: testUserId } })).toBe(ordersBefore + 1);
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock).toBe(stockBefore - 1);
   });
 });

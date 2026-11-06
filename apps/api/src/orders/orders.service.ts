@@ -3,6 +3,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertTransition } from './order-status';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class OrdersService {
@@ -15,7 +16,7 @@ export class OrdersService {
 
     return await this.prisma.$transaction(async (tx) => {
       let calculatedTotal = 0;
-      const orderItemsData = [];
+      const orderItemsData: Prisma.OrderItemCreateWithoutOrderInput[] = [];
 
       // 1. Kiểm tra tồn kho sơ bộ và trừ tồn kho nguyên tử (Optimistic Locking)
       for (const item of createOrderDto.items) {
@@ -29,24 +30,19 @@ export class OrdersService {
         if (!product.isAvailable) {
           throw new BadRequestException(`Sản phẩm "${product.name}" hiện không khả dụng.`);
         }
-
-        // Kiểm tra tồn kho sơ bộ
         if (product.stock < item.quantity) {
           throw new BadRequestException(
             `Sản phẩm "${product.name}" không đủ hàng. Chỉ còn lại ${product.stock} sản phẩm.`,
           );
         }
 
-        // Thực hiện Optimistic Locking / Atomic Update qua updateMany với điều kiện stock >= quantity
         const updateResult = await tx.product.updateMany({
           where: {
             id: Number(item.productId),
             stock: { gte: item.quantity },
           },
           data: {
-            stock: {
-              decrement: item.quantity,
-            },
+            stock: { decrement: item.quantity },
           },
         });
 
@@ -56,13 +52,42 @@ export class OrdersService {
           );
         }
 
-        calculatedTotal += product.price * item.quantity;
+        let itemUnitPrice = product.price;
 
-        orderItemsData.push({
-          productId: Number(item.productId),
+        if (item.size === 'M') {
+          itemUnitPrice += 5000;
+        } else if (item.size === 'L') {
+          itemUnitPrice += 10000;
+        }
+
+        const orderItemPayload: Prisma.OrderItemCreateWithoutOrderInput = {
           quantity: item.quantity,
-          price: product.price,
-        });
+          size: item.size || null,
+          note: item.note || null,
+          unitPrice: itemUnitPrice,
+          product: {
+            connect: { id: Number(item.productId) },
+          },
+        };
+
+        if (item.toppingIds?.length) {
+          const toppings = await tx.topping.findMany({
+            where: { id: { in: item.toppingIds } },
+          });
+
+          if (toppings.length !== item.toppingIds.length) {
+            throw new BadRequestException(`Một hoặc nhiều Topping cho món "${product.name}" không hợp lệ.`);
+          }
+
+          const toppingsTotal = toppings.reduce((sum, topping) => sum + topping.price, 0);
+          itemUnitPrice += toppingsTotal;
+          orderItemPayload.unitPrice = itemUnitPrice;
+          orderItemPayload.toppings = toppings.map(({ id, name, price }) => ({ id, name, price }));
+        }
+
+        calculatedTotal += itemUnitPrice * item.quantity;
+
+        orderItemsData.push(orderItemPayload);
       }
 
       // 2. Kiểm tra Voucher giảm giá
@@ -91,30 +116,35 @@ export class OrdersService {
           throw new BadRequestException('Tài khoản không đủ điểm thưởng để áp dụng');
         }
 
-        const pointDiscount = createOrderDto.pointsToUse * 1000; // 1 điểm = 1.000 VNĐ
+        const pointDiscount = createOrderDto.pointsToUse * 1000;
         calculatedTotal -= pointDiscount;
       }
 
-      // Đảm bảo tổng tiền không bị âm
       if (calculatedTotal < 0) calculatedTotal = 0;
 
-      // 4. Trừ lượt dùng của voucher (nếu có)
+      // 4. Trừ lượt dùng voucher
       if (promoToUpdate) {
-        await tx.promotion.update({
-          where: { id: promoToUpdate },
+        const promoUpdate = await tx.promotion.updateMany({
+          where: { id: promoToUpdate, usageLimit: { gt: 0 } },
           data: { usageLimit: { decrement: 1 } },
         });
+        if (promoUpdate.count !== 1) {
+          throw new ConflictException('Mã giảm giá vừa hết lượt sử dụng. Vui lòng thử lại!');
+        }
       }
 
-      // 5. Trừ điểm của người dùng (nếu có)
+      // 5. Trừ điểm của người dùng
       if (createOrderDto.pointsToUse) {
-        await tx.user.update({
-          where: { id: userId },
+        const pointsUpdate = await tx.user.updateMany({
+          where: { id: userId, rewardPoints: { gte: createOrderDto.pointsToUse } },
           data: { rewardPoints: { decrement: createOrderDto.pointsToUse } },
         });
+        if (pointsUpdate.count !== 1) {
+          throw new ConflictException('Số dư điểm thưởng vừa thay đổi. Vui lòng thử lại!');
+        }
       }
 
-      // 6. Tạo đơn hàng mới
+      // 6. Tạo đơn hàng với các Option đã chốt giá
       const newOrder = await tx.order.create({
         data: {
           userId: userId,
