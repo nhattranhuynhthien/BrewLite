@@ -2,6 +2,16 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:40
 const ACCESS_TOKEN_KEY = 'brewlite_access_token';
 const AUTH_CHANGE_EVENT = 'brewlite:auth-change';
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export function getAccessToken(): string | null {
   return typeof window === 'undefined' ? null : window.localStorage.getItem(ACCESS_TOKEN_KEY);
 }
@@ -59,7 +69,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     } else if (body) {
       message = `API trả về phản hồi không hợp lệ (${response.status}). Vui lòng kiểm tra URL backend.`;
     }
-    throw new Error(message);
+    if (response.status === 401) {
+      setAccessToken(null);
+      message = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
+    }
+    throw new ApiError(message, response.status);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

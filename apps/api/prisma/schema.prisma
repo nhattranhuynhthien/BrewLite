@@ -59,6 +59,8 @@ model OrderItem {
   productId Int
   quantity  Int
   size      String?  // VD: "S", "M", "L"
+  sweetness String?
+  ice       String?
   toppings  Json?    // Lưu mảng ID hoặc tên topping kèm giá: [{"id": 1, "name": "Trân châu", "price": 5000}]
   note      String?  @db.VarChar(255)
   unitPrice Float    // Giá chốt tại thời điểm đặt = giá gốc + size + topping

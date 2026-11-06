@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, ClipboardCheck, Minus, Plus, ShieldCheck, ShoppingCart, Trash2, Truck } from 'lucide-react';
+import { ArrowLeft, ClipboardCheck, MapPin, Minus, Plus, ShieldCheck, ShoppingCart, Trash2 } from 'lucide-react';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useCartPage } from '@/hooks/useCartPage';
 import {
@@ -17,8 +17,6 @@ const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
 export default function CartPage() {
   const {
     clearCart,
-    deliveryFee,
-    freeDeliveryThreshold,
     items,
     removeItem,
     setQuantity,
@@ -132,14 +130,13 @@ export default function CartPage() {
                 <dl className="cart-summary__rows">
                   <div><dt>Tạm tính ({totalQuantity} món)</dt><dd>{formatPrice(subtotal)}</dd></div>
                   <div><dt>Giảm giá</dt><dd>{formatPrice(0)}</dd></div>
-                  <div><dt>Phí giao hàng</dt><dd>{deliveryFee === 0 ? 'Miễn phí' : formatPrice(deliveryFee)}</dd></div>
                 </dl>
                 <div className="cart-summary__total"><strong>Tổng cộng</strong><strong>{formatPrice(total)}</strong></div>
                 <div className="cart-delivery-note">
-                  <Truck aria-hidden="true" size={18} />
-                  <p>Miễn phí giao hàng cho đơn từ {formatPrice(freeDeliveryThreshold)}<small>Áp dụng tự động cho đơn hàng của bạn.</small></p>
+                  <MapPin aria-hidden="true" size={18} />
+                  <p>Nhận tại quầy<small>Đơn hàng được chuẩn bị tại cửa hàng.</small></p>
                 </div>
-                <Link className="cart-button cart-button--primary cart-checkout" href="/?checkout=1">
+                <Link className="cart-button cart-button--primary cart-checkout" href="/checkout">
                   <ShoppingCart aria-hidden="true" size={16} /> Tiến hành thanh toán
                 </Link>
                 <div className="cart-secure-note">

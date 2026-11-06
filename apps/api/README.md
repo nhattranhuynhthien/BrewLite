@@ -52,11 +52,14 @@ Send the login token on protected routes as `Authorization: Bearer <accessToken>
 |---|---|---|---|
 | `GET` | `/products` | Public | List available products; optionally filter with `?category=coffee` |
 | `GET` | `/products/:id` | Public | Get an available product |
+| `GET` | `/toppings` | Public | List topping IDs, names, and current prices |
 
 Product records include `id`, `name`, `description`, `price`, `stock`, `imageUrl`, `category`, and `isAvailable`.
 The catalog migration seeds the menu categories `coffee`, `tea`, `milk-tea`, `smoothie`, and `cake`.
 
 ### Orders and history
+
+Order items may also include `size`, `toppingIds`, `sweetness`, `ice`, and `note`. The API saves those choices per item and calculates prices from the catalog and current topping prices; client-supplied user IDs, item prices, and totals are ignored. The MVP supports pickup at the store and does not add a delivery fee.
 
 | Method | Endpoint | Access | Purpose |
 |---|---|---|---|

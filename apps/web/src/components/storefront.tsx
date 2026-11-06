@@ -3,11 +3,17 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import Image from 'next/image';
 import { CalendarDays, ChevronDown, ClipboardList, CreditCard, MapPin, Search, WalletCards } from 'lucide-react';
-import { apiFetch, getAccessToken, getUserIdFromAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
+import { ApiError, apiFetch, getAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 import SiteHeader from '@/layouts/SiteHeader';
 import ProductDetailModal from '@/components/ProductDetailModal';
 import { PRODUCTS as MENU_PRODUCTS } from '@/lib/menu-data';
+import {
+  getCartItemKey,
+  getConfiguredUnitPrice,
+  normalizeProductOptions,
+} from '@/lib/product-options';
 import { useCartStore } from '@/store/cart-store';
+import { useToppings } from '@/hooks/useToppings';
 import type { Product } from '@/types/product';
 
 type View = 'menu' | 'checkout' | 'confirmation' | 'orders';
@@ -20,7 +26,12 @@ type Order = {
   items?: {
     id: number;
     quantity: number;
-    price: number;
+    unitPrice: number;
+    size: 'S' | 'M' | 'L' | null;
+    toppings: { id: number; name: string; price: number }[] | null;
+    sweetness: string | null;
+    ice: string | null;
+    note: string | null;
     product?: Pick<Product, 'name' | 'imageUrl'> | null;
   }[];
   payment?: { method: string; status: string }[];
@@ -63,6 +74,12 @@ export default function Storefront({
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
   const [productsError, setProductsError] = useState('');
+  const {
+    toppings,
+    loading: toppingsLoading,
+    error: toppingsError,
+    reload: reloadToppings,
+  } = useToppings();
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [view, setView] = useState<View>(initialView);
@@ -81,6 +98,7 @@ export default function Storefront({
   const [expandedOrders, setExpandedOrders] = useState<Set<string> | null>(null);
   const [receipt, setReceipt] = useState<{ id: number | string; status: string } | null>(null);
   const idempotencyKey = useRef<string | null>(null);
+  const pendingOrderId = useRef<number | string | null>(null);
 
   useEffect(() => {
     if (initialView !== 'checkout' || window.location.search === '') return;
@@ -126,7 +144,7 @@ export default function Storefront({
       : featuredProducts;
   }, [products, searchQuery]);
   const total = useMemo(
-    () => items.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
+    () => items.reduce((sum, item) => sum + getConfiguredUnitPrice(item.product, item.options) * item.quantity, 0),
     [items],
   );
   const filteredHistory = useMemo(() => {
@@ -203,11 +221,6 @@ export default function Storefront({
       setAuthOpen(true);
       return;
     }
-    const userId = getUserIdFromAccessToken(token);
-    if (!userId) {
-      setCheckoutError('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
-      return;
-    }
     if (items.length === 0) {
       setCheckoutError('Giỏ hàng đang trống.');
       return;
@@ -218,25 +231,36 @@ export default function Storefront({
     idempotencyKey.current ??= crypto.randomUUID();
     const key = idempotencyKey.current;
     try {
-      const created = await apiFetch<{
-        id?: number | string;
-        orderId?: number | string;
-        order?: { id: number | string };
-      }>('/orders', {
-        method: 'POST',
-        headers: { 'Idempotency-Key': key },
-        body: JSON.stringify({
-          userId,
-          total,
-          items: items.map(({ product, quantity }) => ({
-            productId: product.id,
-            quantity,
-            price: product.price,
-          })),
-        }),
-      });
-      const orderId = created.orderId ?? created.order?.id ?? created.id;
-      if (orderId === undefined || orderId === null) throw new Error('API tạo đơn không trả về mã đơn hàng.');
+      if (pendingOrderId.current === null) {
+        const created = await apiFetch<{
+          id?: number | string;
+          orderId?: number | string;
+          order?: { id: number | string };
+        }>('/orders', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': key },
+          body: JSON.stringify({
+            items: items.map(({ product, quantity, options }) => {
+              const normalized = normalizeProductOptions(options);
+              return {
+                productId: product.id,
+                quantity,
+                size: normalized.size,
+                toppingIds: normalized.toppings.map(({ id }) => id),
+                sweetness: normalized.sweetness,
+                ice: normalized.ice,
+                note: normalized.note,
+              };
+            }),
+          }),
+        });
+        const createdOrderId = created.orderId ?? created.order?.id ?? created.id;
+        if (createdOrderId === undefined || createdOrderId === null) {
+          throw new Error('API tạo đơn không trả về mã đơn hàng.');
+        }
+        pendingOrderId.current = createdOrderId;
+      }
+      const orderId = pendingOrderId.current;
 
       const payment = await apiFetch<{
         status?: string;
@@ -247,7 +271,7 @@ export default function Storefront({
       }>('/payments', {
         method: 'POST',
         headers: { 'Idempotency-Key': key },
-        body: JSON.stringify({ orderId, amount: total, method }),
+        body: JSON.stringify({ orderId, method }),
       });
       const paymentStatus = payment?.status ?? payment?.orderStatus ?? payment?.payment?.status ?? payment?.order?.status;
       if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
@@ -258,9 +282,14 @@ export default function Storefront({
       setReceipt({ id: orderId, status: payment.order?.status ?? payment.orderStatus ?? paymentStatus ?? 'PAID' });
       clearCart();
       idempotencyKey.current = null;
+      pendingOrderId.current = null;
       setView('confirmation');
     } catch (error) {
       setCheckoutError(error instanceof Error ? error.message : 'Không thể hoàn tất thanh toán.');
+      if (error instanceof ApiError && error.status === 401) {
+        setAuthMode('login');
+        setAuthOpen(true);
+      }
     } finally {
       setCheckoutBusy(false);
     }
@@ -355,7 +384,7 @@ export default function Storefront({
 
       {view === 'checkout' && <section className="page-section checkout-section">
         <button className="back-link" onClick={() => setView('menu')} type="button">← Quay lại thực đơn</button>
-        <div className="checkout-header"><span className="eyebrow">BƯỚC CUỐI CÙNG</span><h1>Thanh toán</h1><p>Chọn phương thức thanh toán phù hợp với bạn.</p></div>
+        <div className="checkout-header"><span className="eyebrow">BƯỚC CUỐI CÙNG</span><h1>Thanh toán</h1><p>Nhận tại quầy · Không tính phí giao hàng.</p></div>
         <div className="checkout-layout">
           <div className="payment-card"><h2>Phương thức thanh toán</h2>
             <button className={`payment-option ${method === 'WALLET' ? 'selected' : ''}`} onClick={() => setMethod('WALLET')} type="button">
@@ -371,8 +400,21 @@ export default function Storefront({
             </button>
             <p className="terms-copy">Bằng việc tiếp tục, bạn đồng ý với điều khoản sử dụng của BrewLite.</p>
           </div>
-          <aside className="order-summary"><h2>Đơn hàng của bạn <span>{items.length} món</span></h2>
-            {items.map((item) => <div className="summary-row" key={item.product.id}><span className="summary-quantity">{item.quantity}×</span><span className="summary-name">{item.product.name}</span><strong>{currency(item.product.price * item.quantity)}</strong></div>)}
+          <aside className="order-summary"><h2>Đơn hàng của bạn <span>{items.reduce((sum, item) => sum + item.quantity, 0)} món</span></h2>
+            {items.map((item) => {
+              const options = normalizeProductOptions(item.options);
+              const toppingsLabel = options.toppings.map(({ name }) => name).join(', ');
+              return (
+                <div className="summary-row" key={getCartItemKey(item.product.id, item.options)}>
+                  <span className="summary-quantity">{item.quantity}×</span>
+                  <span className="summary-name">
+                    {item.product.name}
+                    <small>Size {options.size}{toppingsLabel ? ` · ${toppingsLabel}` : ''} · {options.sweetness} · {options.ice}</small>
+                  </span>
+                  <strong>{currency(getConfiguredUnitPrice(item.product, item.options) * item.quantity)}</strong>
+                </div>
+              );
+            })}
             <div className="summary-total"><span>Tổng thanh toán</span><strong>{currency(total)}</strong></div>
           </aside>
         </div>
@@ -449,18 +491,28 @@ export default function Storefront({
                           {isExpanded && (
                             <div className="history-order__body">
                               <div className="history-order__items">
-                                {(order.items ?? []).map((item) => (
-                                  <div className="history-item" key={item.id}>
-                                    <div className="history-item__image">
-                                      {item.product?.imageUrl && <Image src={item.product.imageUrl} alt="" fill sizes="48px" />}
+                                {(order.items ?? []).map((item) => {
+                                  const optionsSummary = [
+                                    item.size ? `Size ${item.size}` : '',
+                                    item.toppings?.map(({ name }) => name).join(', ') ?? '',
+                                    item.sweetness ?? '',
+                                    item.ice ?? '',
+                                    item.note ? `Ghi chú: ${item.note}` : '',
+                                    `SL: ${item.quantity}`,
+                                  ].filter(Boolean).join(' · ');
+                                  return (
+                                    <div className="history-item" key={item.id}>
+                                      <div className="history-item__image">
+                                        {item.product?.imageUrl && <Image src={item.product.imageUrl} alt="" fill sizes="48px" />}
+                                      </div>
+                                      <div className="history-item__details">
+                                        <strong>{item.product?.name ?? 'Sản phẩm'}</strong>
+                                        <span>{optionsSummary}</span>
+                                        <b>{currency(item.unitPrice * item.quantity)}</b>
+                                      </div>
                                     </div>
-                                    <div className="history-item__details">
-                                      <strong>{item.product?.name ?? 'Sản phẩm'}</strong>
-                                      <span>Size M · SL: {item.quantity}</span>
-                                      <b>{currency(item.price * item.quantity)}</b>
-                                    </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                                 {(order.items?.length ?? 0) === 0 && <p className="history-order__empty-items">Không có thông tin món trong đơn này.</p>}
                               </div>
                               <div className="history-order__delivery">
@@ -469,8 +521,7 @@ export default function Storefront({
                               </div>
                               <div className="history-order__total">
                                 <div><span>Tạm tính</span><strong>{currency(order.total)}</strong></div>
-                                <div><span>Phí giao hàng</span><strong>Miễn phí</strong></div>
-                                <div className="history-order__grand-total"><span>Tổng cộng</span><strong>{currency(order.total)}</strong></div>
+                                <div className="history-order__grand-total"><span>Tổng thanh toán · nhận tại quầy</span><strong>{currency(order.total)}</strong></div>
                                 <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
                               </div>
                             </div>
@@ -492,6 +543,10 @@ export default function Storefront({
         <ProductDetailModal
           key={selectedProduct.id}
           product={selectedProduct}
+          toppings={toppings}
+          toppingsLoading={toppingsLoading}
+          toppingsError={toppingsError}
+          onReloadToppings={() => void reloadToppings()}
           onClose={() => setSelectedProduct(null)}
           onAdd={(product, quantity, options) => {
             addItem(product, quantity, options);

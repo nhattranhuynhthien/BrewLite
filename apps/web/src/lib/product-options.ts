@@ -28,11 +28,6 @@ export const SIZE_EXTRA_PRICES: Record<CupSize, number> = {
 export const SWEETNESS_OPTIONS: Sweetness[] = ['Ít đường', 'Bình thường', 'Nhiều đường'];
 export const ICE_OPTIONS: Ice[] = ['Ít đá', 'Bình thường', 'Không đá'];
 
-// Replace this sample catalog with Tài's topping API data before checkout integration.
-export const DEMO_TOPPING_OPTIONS: ToppingOption[] = [
-  { id: 1, code: 'TRAN_CHAU', name: 'Trân châu', extraPrice: 5000 },
-];
-
 export function defaultProductOptions(): SelectedProductOptions {
   return {
     size: 'M',

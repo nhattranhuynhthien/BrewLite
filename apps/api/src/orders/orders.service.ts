@@ -63,6 +63,8 @@ export class OrdersService {
         const orderItemPayload: Prisma.OrderItemCreateWithoutOrderInput = {
           quantity: item.quantity,
           size: item.size || null,
+          sweetness: item.sweetness || null,
+          ice: item.ice || null,
           note: item.note || null,
           unitPrice: itemUnitPrice,
           product: {

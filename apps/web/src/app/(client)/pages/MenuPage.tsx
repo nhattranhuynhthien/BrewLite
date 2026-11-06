@@ -18,6 +18,7 @@ import ProductCard from '../components/ProductCard';
 import ProductDetailModal from '@/components/ProductDetailModal';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useProducts } from '@/hooks/useProducts';
+import { useToppings } from '@/hooks/useToppings';
 import { CATEGORIES } from '@/lib/menu-data';
 import type { CategoryId, Product } from '@/types/product';
 import { useCartStore } from '@/store/cart-store';
@@ -42,6 +43,12 @@ export default function MenuPage() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const { products, loading, error, reload } = useProducts();
+  const {
+    toppings,
+    loading: toppingsLoading,
+    error: toppingsError,
+    reload: reloadToppings,
+  } = useToppings();
   const addItem = useCartStore((state) => state.addItem);
 
   const query = searchQuery.trim().toLocaleLowerCase('vi');
@@ -169,6 +176,10 @@ export default function MenuPage() {
         <ProductDetailModal
           key={selectedProduct.id}
           product={selectedProduct}
+          toppings={toppings}
+          toppingsLoading={toppingsLoading}
+          toppingsError={toppingsError}
+          onReloadToppings={() => void reloadToppings()}
           onClose={() => setSelectedProduct(null)}
           onAdd={(product, quantity, options) => {
             addItem(product, quantity, options);

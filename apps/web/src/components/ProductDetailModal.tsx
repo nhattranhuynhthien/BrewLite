@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { Minus, Plus, ShoppingCart, X } from 'lucide-react';
 import {
-  DEMO_TOPPING_OPTIONS,
   ICE_OPTIONS,
   SIZE_EXTRA_PRICES,
   SWEETNESS_OPTIONS,
@@ -12,6 +11,7 @@ import {
   type Ice,
   type SelectedProductOptions,
   type Sweetness,
+  type ToppingOption,
 } from '@/lib/product-options';
 import type { Product } from '@/types/product';
 import '@/styles/ProductDetailModal.css';
@@ -20,18 +20,30 @@ const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
 
 interface Props {
   product: Product;
+  toppings: ToppingOption[];
+  toppingsLoading: boolean;
+  toppingsError: string;
+  onReloadToppings: () => void;
   onClose: () => void;
   onAdd: (product: Product, quantity: number, options: SelectedProductOptions) => void;
 }
 
-export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
+export default function ProductDetailModal({
+  product,
+  toppings,
+  toppingsLoading,
+  toppingsError,
+  onReloadToppings,
+  onClose,
+  onAdd,
+}: Props) {
   const [size, setSize] = useState<CupSize>('M');
   const [sweetness, setSweetness] = useState<Sweetness>('Bình thường');
   const [ice, setIce] = useState<Ice>('Bình thường');
   const [selectedToppingIds, setSelectedToppingIds] = useState<number[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [note, setNote] = useState('');
-  const selectedToppings = DEMO_TOPPING_OPTIONS.filter(({ id }) =>
+  const selectedToppings = toppings.filter(({ id }) =>
     selectedToppingIds.includes(id),
   );
   const price =
@@ -123,7 +135,16 @@ export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
           <fieldset className="product-modal__group">
             <legend>Topping</legend>
             <div className="product-modal__choices">
-              {DEMO_TOPPING_OPTIONS.map((topping) => (
+              {toppingsLoading ? (
+                <p role="status">Đang tải danh sách topping...</p>
+              ) : toppingsError ? (
+                <div role="alert">
+                  <p>{toppingsError}</p>
+                  <button type="button" onClick={onReloadToppings}>Thử tải lại</button>
+                </div>
+              ) : toppings.length === 0 ? (
+                <p>Hiện chưa có topping.</p>
+              ) : toppings.map((topping) => (
                 <label key={topping.id}>
                   <input
                     type="checkbox"
@@ -217,7 +238,7 @@ export default function ProductDetailModal({ product, onClose, onAdd }: Props) {
           <button
             type="button"
             className="product-modal__submit"
-            disabled={!available}
+            disabled={!available || toppingsLoading || Boolean(toppingsError)}
             onClick={() => onAdd(product, quantity, options)}
           >
             <ShoppingCart size={20} />

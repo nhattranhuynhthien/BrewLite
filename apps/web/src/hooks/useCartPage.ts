@@ -4,9 +4,6 @@ import { useMemo } from 'react';
 import { useCartStore } from '@/store/cart-store';
 import { getConfiguredUnitPrice } from '@/lib/product-options';
 
-export const FREE_DELIVERY_THRESHOLD = 150_000;
-export const DELIVERY_FEE = 25_000;
-
 export function useCartPage() {
   const items = useCartStore((state) => state.items);
   const setQuantity = useCartStore((state) => state.setQuantity);
@@ -24,17 +21,13 @@ export function useCartPage() {
     () => items.reduce((sum, item) => sum + item.quantity, 0),
     [items],
   );
-  const deliveryFee = subtotal >= FREE_DELIVERY_THRESHOLD || items.length === 0 ? 0 : DELIVERY_FEE;
-
   return {
     clearCart,
-    deliveryFee,
-    freeDeliveryThreshold: FREE_DELIVERY_THRESHOLD,
     items,
     removeItem,
     setQuantity,
     subtotal,
-    total: subtotal + deliveryFee,
+    total: subtotal,
     totalQuantity,
   };
 }

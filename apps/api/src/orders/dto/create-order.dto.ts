@@ -20,6 +20,16 @@ export class OrderItemDto {
   @IsIn(['S', 'M', 'L'], { message: 'Size chỉ được là S, M hoặc L' })
   size?: string;
 
+  @ApiPropertyOptional({ description: 'Mức độ ngọt', enum: ['Ít đường', 'Bình thường', 'Nhiều đường'] })
+  @IsOptional()
+  @IsIn(['Ít đường', 'Bình thường', 'Nhiều đường'])
+  sweetness?: string;
+
+  @ApiPropertyOptional({ description: 'Mức đá', enum: ['Ít đá', 'Bình thường', 'Không đá'] })
+  @IsOptional()
+  @IsIn(['Ít đá', 'Bình thường', 'Không đá'])
+  ice?: string;
+
   @ApiPropertyOptional({ 
     description: 'Danh sách ID của các topping chọn thêm', 
     example: [3, 5], 
