@@ -22,3 +22,7 @@ out/
 .vscode/
 .idea/
 *.log
+*.tsbuildinfo
+/mydocs
+/frontend
+
