@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 
 export abstract class PaymentGateway {
-  abstract charge(orderId: number, amount: number, method: string): Promise<{ success: boolean }>;
+  abstract charge(
+    orderId: number,
+    amount: number,
+    method: string,
+    idempotencyKey: string,
+  ): Promise<{ success: boolean }>;
 }
 
 // Đặt `success = false` trong test để giả lập cổng thanh toán từ chối.

@@ -273,9 +273,12 @@ export default function Storefront({
         headers: { 'Idempotency-Key': key },
         body: JSON.stringify({ orderId, method }),
       });
-      const paymentStatus = payment?.status ?? payment?.orderStatus ?? payment?.payment?.status ?? payment?.order?.status;
+      const paymentStatus = payment?.orderStatus ?? payment?.payment?.status ?? payment?.status ?? payment?.order?.status;
       if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
-      if (paymentStatus === 'PAYMENT_FAILED') throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
+      if (paymentStatus === 'PAYMENT_FAILED' || paymentStatus === 'FAILED') {
+        idempotencyKey.current = crypto.randomUUID();
+        throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
+      }
       if (paymentStatus !== 'PAID' && paymentStatus !== 'SUCCESS') {
         throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${paymentStatus}).`);
       }
