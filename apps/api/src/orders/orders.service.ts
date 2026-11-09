@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+} from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -210,15 +215,25 @@ export class OrdersService {
       throw new BadRequestException('Order status is required');
     }
 
-    const order = await this.prisma.order.findUnique({ where: { id } });
-    if (!order) {
-      throw new NotFoundException(`Order ${id} not found`);
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id } });
+      if (!order) {
+        throw new NotFoundException(`Order ${id} not found`);
+      }
 
-    assertTransition(order.status, updateOrderDto.status);
-    return this.prisma.order.update({
-      where: { id },
-      data: { status: updateOrderDto.status },
+      assertTransition(order.status, updateOrderDto.status);
+      const result = await tx.order.updateMany({
+        where: { id, status: order.status },
+        data: { status: updateOrderDto.status },
+      });
+
+      if (result.count !== 1) {
+        throw new ConflictException(
+          'Order status changed while this update was being processed. Please retry.',
+        );
+      }
+
+      return tx.order.findUnique({ where: { id } });
     });
   }
 

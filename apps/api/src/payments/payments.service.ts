@@ -8,6 +8,11 @@ import { Prisma } from '@prisma/client';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentGateway } from './payment.gateway';
+import {
+  assertPaymentAllowed,
+  assertTransition,
+  OrderStatus,
+} from '../orders/order-status';
 
 @Injectable()
 export class PaymentsService {
@@ -49,6 +54,8 @@ export class PaymentsService {
         };
       }
     }
+
+    assertPaymentAllowed(order.status);
 
     if (!existingKey) {
       const successfulPayment = await this.prisma.payment.findFirst({
@@ -107,7 +114,9 @@ export class PaymentsService {
     // Tính toán số điểm thưởng (1 điểm cho mỗi 10.000 VNĐ), chỉ khi thanh toán thành công
     const pointsToAdd = success ? Math.floor(order.total / 10000) : 0;
     const paymentStatus = success ? 'PAID' : 'FAILED';
-    const orderStatus = success ? 'PAID' : 'PAYMENT_FAILED';
+    const orderStatus = success
+      ? OrderStatus.PAID
+      : OrderStatus.PAYMENT_FAILED;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const claim = await tx.procPaymentKey.updateMany({
@@ -140,12 +149,40 @@ export class PaymentsService {
         );
       }
 
+      let expectedStatus = order.status;
+      if (expectedStatus === OrderStatus.PAYMENT_FAILED) {
+        assertTransition(expectedStatus, OrderStatus.PENDING);
+        const retryTransition = await tx.order.updateMany({
+          where: { id: orderId, status: expectedStatus },
+          data: { status: OrderStatus.PENDING },
+        });
+        if (retryTransition.count !== 1) {
+          throw new ConflictException(
+            'Order status changed while payment was being processed. Please retry.',
+          );
+        }
+        expectedStatus = OrderStatus.PENDING;
+      }
+
+      assertTransition(expectedStatus, orderStatus);
+      const orderTransition = await tx.order.updateMany({
+        where: { id: orderId, status: expectedStatus },
+        data: { status: orderStatus },
+      });
+      if (orderTransition.count !== 1) {
+        throw new ConflictException(
+          'Order status changed while payment was being processed. Please retry.',
+        );
+      }
+
+      const updatedOrder = await tx.order.findUnique({
+        where: { id: orderId },
+      });
+      if (!updatedOrder) {
+        throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
+      }
       const payment = await tx.payment.create({
         data: { orderId, method, amount: order.total, status: paymentStatus },
-      });
-      const updatedOrder = await tx.order.update({
-        where: { id: orderId },
-        data: { status: orderStatus },
       });
       if (success) {
         await tx.user.update({

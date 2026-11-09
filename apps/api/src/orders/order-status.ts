@@ -39,3 +39,14 @@ export function assertTransition(currentStatus: string, nextStatus: string): voi
     );
   }
 }
+
+export function assertPaymentAllowed(currentStatus: string): void {
+  if (
+    currentStatus !== OrderStatus.PENDING &&
+    currentStatus !== OrderStatus.PAYMENT_FAILED
+  ) {
+    throw new BadRequestException(
+      `Payment is not allowed for order status ${currentStatus}`,
+    );
+  }
+}

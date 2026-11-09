@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { OrdersService } from './orders.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderStatus } from './order-status';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -11,13 +11,17 @@ describe('OrdersService', () => {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
-      update: jest.fn(),
+      updateMany: jest.fn(),
       create: jest.fn(),
     },
+    $transaction: jest.fn((callback: (tx: unknown) => Promise<unknown>) =>
+      callback(prisma),
+    ),
   };
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
     const module: TestingModule = await Test.createTestingModule({
       providers: [OrdersService, { provide: PrismaService, useValue: prisma }],
     }).compile();
@@ -38,24 +42,36 @@ describe('OrdersService', () => {
     await expect(
       service.update(1, { status: OrderStatus.PREPARING }),
     ).rejects.toThrow(BadRequestException);
-    expect(prisma.order.update).not.toHaveBeenCalled();
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
   });
 
   it('updates an order through an allowed state transition', async () => {
     const updatedOrder = { id: 1, status: OrderStatus.PAID };
-    prisma.order.findUnique.mockResolvedValue({
-      id: 1,
-      status: OrderStatus.PENDING,
-    });
-    prisma.order.update.mockResolvedValue(updatedOrder);
+    prisma.order.findUnique
+      .mockResolvedValueOnce({ id: 1, status: OrderStatus.PENDING })
+      .mockResolvedValueOnce(updatedOrder);
 
     await expect(
       service.update(1, { status: OrderStatus.PAID }),
     ).resolves.toBe(updatedOrder);
-    expect(prisma.order.update).toHaveBeenCalledWith({
-      where: { id: 1 },
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, status: OrderStatus.PENDING },
       data: { status: OrderStatus.PAID },
     });
+  });
+
+  it('does not overwrite a status changed by a concurrent update', async () => {
+    prisma.order.findUnique.mockResolvedValue({
+      id: 1,
+      status: OrderStatus.PENDING,
+    });
+    prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.update(1, { status: OrderStatus.PAID }),
+    ).rejects.toThrow(ConflictException);
+    expect(prisma.order.findUnique).toHaveBeenCalledTimes(1);
   });
 
   it('returns only the authenticated user’s orders, newest first', async () => {

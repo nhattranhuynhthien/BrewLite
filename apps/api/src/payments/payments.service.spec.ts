@@ -12,8 +12,9 @@ describe('PaymentsService', () => {
   let service: PaymentsService;
   const gateway = new MockPaymentGateway();
   const paymentKeys = new Map<string, { key: string; response: string }>();
+  let currentOrderStatus = 'PENDING';
   const prisma = {
-    order: { findUnique: jest.fn(), update: jest.fn() },
+    order: { findUnique: jest.fn(), updateMany: jest.fn() },
     payment: { findFirst: jest.fn(), create: jest.fn() },
     user: { update: jest.fn() },
     procPaymentKey: {
@@ -32,11 +33,15 @@ describe('PaymentsService', () => {
     jest.restoreAllMocks();
     paymentKeys.clear();
     gateway.success = true;
-    prisma.order.findUnique.mockResolvedValue({
-      id: 5,
-      userId: 12,
-      total: 25000,
-    });
+    currentOrderStatus = 'PENDING';
+    prisma.order.findUnique.mockImplementation(() =>
+      Promise.resolve({
+        id: 5,
+        userId: 12,
+        total: 25000,
+        status: currentOrderStatus,
+      }),
+    );
     prisma.procPaymentKey.findUnique.mockImplementation(({ where }) =>
       Promise.resolve(paymentKeys.get(where.key) ?? null),
     );
@@ -61,10 +66,11 @@ describe('PaymentsService', () => {
     });
     prisma.payment.findFirst.mockResolvedValue(null);
     prisma.payment.create.mockImplementation(async ({ data }) => data);
-    prisma.order.update.mockImplementation(async ({ data }) => ({
-      id: 5,
-      ...data,
-    }));
+    prisma.order.updateMany.mockImplementation(async ({ where, data }) => {
+      if (where.status !== currentOrderStatus) return { count: 0 };
+      currentOrderStatus = data.status;
+      return { count: 1 };
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -119,8 +125,8 @@ describe('PaymentsService', () => {
     expect(res.status).toBe('FAILED');
     expect(res.orderStatus).toBe('PAYMENT_FAILED');
     expect(res.rewardPointsAdded).toBe(0);
-    expect(prisma.order.update).toHaveBeenCalledWith({
-      where: { id: 5 },
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 5, status: 'PENDING' },
       data: { status: 'PAYMENT_FAILED' },
     });
     expect(prisma.user.update).not.toHaveBeenCalled();
@@ -138,6 +144,55 @@ describe('PaymentsService', () => {
     );
 
     expect(res.status).toBe('PAID');
+    expect(prisma.order.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 5, status: 'PAYMENT_FAILED' },
+      data: { status: 'PENDING' },
+    });
+    expect(prisma.order.updateMany).toHaveBeenNthCalledWith(3, {
+      where: { id: 5, status: 'PENDING' },
+      data: { status: 'PAID' },
+    });
+  });
+
+  it.each([
+    'CANCELLED',
+    'COMPLETED',
+    'PREPARING',
+    'READY',
+    'PAID',
+    'UNKNOWN',
+  ])(
+    'rejects payment for an order in %s without changing payment or reward data',
+    async (status) => {
+      currentOrderStatus = status;
+      const charge = jest.spyOn(gateway, 'charge');
+
+      await expect(
+        service.create({ orderId: 5, method: 'WALLET' }, `key-${status}`, 12),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(charge).not.toHaveBeenCalled();
+      expect(prisma.procPaymentKey.create).not.toHaveBeenCalled();
+      expect(prisma.payment.create).not.toHaveBeenCalled();
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(currentOrderStatus).toBe(status);
+    },
+  );
+
+  it('does not write payment or points if the order changes during payment', async () => {
+    const charge = jest.spyOn(gateway, 'charge').mockImplementation(async () => {
+      currentOrderStatus = 'CANCELLED';
+      return { success: true };
+    });
+
+    await expect(
+      service.create({ orderId: 5, method: 'WALLET' }, 'concurrent-key', 12),
+    ).rejects.toThrow(ConflictException);
+
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
   it('replays an unresolved gateway request with the same key', async () => {
