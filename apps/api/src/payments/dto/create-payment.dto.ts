@@ -1,5 +1,12 @@
-import { IsInt, IsString, IsNotEmpty, Min } from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+
+// Danh sách phương thức thanh toán được chấp nhận. Sửa cho khớp với UI.
+export enum PaymentMethod {
+  MOMO = 'MOMO',
+  WALLET = 'WALLET',
+  CREDIT_CARD = 'CREDIT_CARD',
+}
 
 export class CreatePaymentDto {
   @ApiProperty({ example: 6 })
@@ -8,8 +15,12 @@ export class CreatePaymentDto {
   @IsNotEmpty()
   orderId: number;
 
-  @ApiProperty({ example: 'MOMO' })
-  @IsString()
+  @IsInt()
+  @Min(1)
   @IsNotEmpty()
-  method: string;
+  amount: number;
+
+  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.MOMO })
+  @IsEnum(PaymentMethod)
+  method: PaymentMethod;
 }

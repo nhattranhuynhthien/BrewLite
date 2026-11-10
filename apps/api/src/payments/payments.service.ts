@@ -30,13 +30,19 @@ export class PaymentsService {
       throw new BadRequestException('Thiếu Idempotency-Key trong Header');
     }
 
-    const { orderId, method } = createPaymentDto;
+    const { orderId, method, amount } = createPaymentDto;
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
 
     if (!order || order.userId !== userId) {
       throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
+    }
+
+    if (amount !== undefined && amount < order.total) {
+      throw new BadRequestException(
+        'Số tiền thanh toán không được nhỏ hơn số tiền cần trả của đơn hàng.',
+      );
     }
 
     let existingKey = await this.prisma.procPaymentKey.findUnique({

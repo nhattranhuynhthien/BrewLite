@@ -75,6 +75,8 @@ model Payment {
   amount    Float
   method    String
   status    String   @default("PENDING")
+  // = orderId khi status PAID, null khi không. Unique => mỗi đơn chỉ có tối đa một payment PAID.
+  paidOrderId Int?   @unique
   createdAt DateTime @default(now())
 }
 
