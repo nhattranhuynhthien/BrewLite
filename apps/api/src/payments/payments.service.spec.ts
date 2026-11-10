@@ -1,285 +1,329 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { PaymentsService } from './payments.service';
-import { PrismaService } from '../prisma/prisma.service';
+import { Test } from '@nestjs/testing';
 import {
   BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PaymentsService } from './payments.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { PaymentGateway, MockPaymentGateway } from './payment.gateway';
+import { OrderStatus } from '../orders/order-status';
 
-describe('PaymentsService', () => {
-  let service: PaymentsService;
-  const gateway = new MockPaymentGateway();
-  const paymentKeys = new Map<string, { key: string; response: string }>();
-  let currentOrderStatus = 'PENDING';
-  const prisma = {
-    order: { findUnique: jest.fn(), updateMany: jest.fn() },
-    payment: { findFirst: jest.fn(), create: jest.fn() },
-    user: { update: jest.fn() },
-    procPaymentKey: {
-      findUnique: jest.fn(),
-      create: jest.fn(),
-      updateMany: jest.fn(),
-      update: jest.fn(),
-    },
-    $transaction: jest.fn((callback: (tx: unknown) => Promise<unknown>) =>
-      callback(prisma),
-    ),
+/**
+ * Prisma giả có trạng thái trong bộ nhớ. $transaction chụp lại dữ liệu và
+ * khôi phục nếu callback ném lỗi, nên test kiểm tra được "lỗi thì không đổi gì".
+ */
+function createFakePrisma() {
+  const db = {
+    orders: new Map<number, any>(),
+    users: new Map<number, any>(),
+    payments: [] as any[],
+    keys: new Map<string, any>(),
+    nextPaymentId: 1,
   };
 
-  beforeEach(async () => {
-    jest.clearAllMocks();
-    jest.restoreAllMocks();
-    paymentKeys.clear();
-    gateway.success = true;
-    currentOrderStatus = 'PENDING';
-    prisma.order.findUnique.mockImplementation(() =>
-      Promise.resolve({
-        id: 5,
-        userId: 12,
-        total: 25000,
-        status: currentOrderStatus,
-      }),
-    );
-    prisma.procPaymentKey.findUnique.mockImplementation(({ where }) =>
-      Promise.resolve(paymentKeys.get(where.key) ?? null),
-    );
-    prisma.procPaymentKey.create.mockImplementation(async ({ data }) => {
-      const record = { key: data.key, response: data.response };
-      paymentKeys.set(data.key, record);
-      return record;
-    });
-    prisma.procPaymentKey.updateMany.mockImplementation(
-      async ({ where, data }) => {
-        const record = paymentKeys.get(where.key);
-        if (!record || record.response !== where.response) return { count: 0 };
-        record.response = data.response;
+  const client: any = {
+    order: {
+      findUnique: async ({ where }: any) => {
+        const o = db.orders.get(where.id);
+        return o ? { ...o } : null;
+      },
+      updateMany: async ({ where, data }: any) => {
+        const o = db.orders.get(where.id);
+        if (!o || (where.status !== undefined && o.status !== where.status)) {
+          return { count: 0 };
+        }
+        Object.assign(o, data);
         return { count: 1 };
       },
-    );
-    prisma.procPaymentKey.update.mockImplementation(async ({ where, data }) => {
-      const record = paymentKeys.get(where.key);
-      if (!record) throw new Error('Payment key not found');
-      record.response = data.response;
-      return record;
-    });
-    prisma.payment.findFirst.mockResolvedValue(null);
-    prisma.payment.create.mockImplementation(async ({ data }) => data);
-    prisma.order.updateMany.mockImplementation(async ({ where, data }) => {
-      if (where.status !== currentOrderStatus) return { count: 0 };
-      currentOrderStatus = data.status;
-      return { count: 1 };
-    });
+    },
+    payment: {
+      findFirst: async ({ where }: any) =>
+        db.payments.find(
+          (p) => p.orderId === where.orderId && p.status === where.status,
+        ) ?? null,
+      create: async ({ data }: any) => {
+        const row = { id: db.nextPaymentId++, ...data };
+        db.payments.push(row);
+        return { ...row };
+      },
+    },
+    user: {
+      update: async ({ where, data }: any) => {
+        const u = db.users.get(where.id);
+        u.rewardPoints += data.rewardPoints.increment;
+        return { ...u };
+      },
+    },
+    procPaymentKey: {
+      findUnique: async ({ where }: any) => {
+        const k = db.keys.get(where.key);
+        return k ? { ...k } : null;
+      },
+      create: async ({ data }: any) => {
+        if (db.keys.has(data.key)) {
+          throw new Prisma.PrismaClientKnownRequestError('dup', {
+            code: 'P2002',
+            clientVersion: 'test',
+          });
+        }
+        db.keys.set(data.key, { ...data });
+        return { ...data };
+      },
+      updateMany: async ({ where, data }: any) => {
+        const k = db.keys.get(where.key);
+        if (!k || k.response !== where.response) return { count: 0 };
+        Object.assign(k, data);
+        return { count: 1 };
+      },
+      update: async ({ where, data }: any) => {
+        const k = db.keys.get(where.key);
+        Object.assign(k, data);
+        return { ...k };
+      },
+    },
+    $transaction: async (cb: (tx: any) => Promise<unknown>) => {
+      const snapshot = {
+        orders: structuredClone(db.orders),
+        users: structuredClone(db.users),
+        payments: structuredClone(db.payments),
+        keys: structuredClone(db.keys),
+        nextPaymentId: db.nextPaymentId,
+      };
+      try {
+        return await cb(client);
+      } catch (e) {
+        db.orders = snapshot.orders;
+        db.users = snapshot.users;
+        db.payments = snapshot.payments;
+        db.keys = snapshot.keys;
+        db.nextPaymentId = snapshot.nextPaymentId;
+        throw e;
+      }
+    },
+  };
 
-    const module: TestingModule = await Test.createTestingModule({
+  return { db, client };
+}
+
+describe('PaymentsService (trạng thái đơn + payment)', () => {
+  let service: PaymentsService;
+  let fake: ReturnType<typeof createFakePrisma>;
+  let gateway: MockPaymentGateway;
+  const USER = 12;
+  const ORDER = 5;
+  const TOTAL = 25000; // => 2 điểm
+
+  const seedOrder = (status: string) =>
+    fake.db.orders.set(ORDER, { id: ORDER, userId: USER, total: TOTAL, status });
+  const pay = (key: string | undefined = 'k1', method = 'MOMO') =>
+    service.create({ orderId: ORDER, method }, key, USER);
+  const points = () => fake.db.users.get(USER).rewardPoints;
+  const orderStatus = () => fake.db.orders.get(ORDER).status;
+
+  beforeEach(async () => {
+    fake = createFakePrisma();
+    gateway = new MockPaymentGateway();
+    fake.db.users.set(USER, { id: USER, rewardPoints: 100 });
+    seedOrder(OrderStatus.PENDING);
+
+    const moduleRef = await Test.createTestingModule({
       providers: [
         PaymentsService,
-        { provide: PrismaService, useValue: prisma },
+        { provide: PrismaService, useValue: fake.client },
         { provide: PaymentGateway, useValue: gateway },
       ],
     }).compile();
-
-    service = module.get<PaymentsService>(PaymentsService);
+    service = moduleRef.get(PaymentsService);
   });
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
-  });
+  describe('luồng hợp lệ', () => {
+    it('PENDING + gateway OK => PAID, cộng điểm, gửi idempotency key cho gateway', async () => {
+      const res = await pay('k1');
 
-  it('does not allow paying another account’s order', async () => {
-    prisma.order.findUnique.mockResolvedValue({
-      id: 5,
-      userId: 99,
-      total: 25000,
+      expect(res).toMatchObject({
+        fromCache: false,
+        status: 'PAID',
+        orderStatus: 'PAID',
+        rewardPointsAdded: 2,
+      });
+      expect(orderStatus()).toBe('PAID');
+      expect(points()).toBe(102);
+      expect(fake.db.payments).toHaveLength(1);
+      expect(gateway.calls).toEqual([
+        { orderId: ORDER, amount: TOTAL, method: 'MOMO', idempotencyKey: 'k1' },
+      ]);
     });
 
-    await expect(
-      service.create({ orderId: 5, method: 'WALLET' }, 'key', 12),
-    ).rejects.toThrow(NotFoundException);
-    expect(prisma.procPaymentKey.findUnique).not.toHaveBeenCalled();
+    it('PENDING + gateway từ chối => PAYMENT_FAILED, không cộng điểm', async () => {
+      gateway.success = false;
+      const res = await pay('k1');
+
+      expect(res).toMatchObject({ status: 'FAILED', orderStatus: 'PAYMENT_FAILED', rewardPointsAdded: 0 });
+      expect(orderStatus()).toBe('PAYMENT_FAILED');
+      expect(points()).toBe(100);
+      expect(fake.db.payments.map((p) => p.status)).toEqual(['FAILED']);
+    });
+
+    it('retry từ PAYMENT_FAILED (key mới) đi PAYMENT_FAILED -> PENDING -> PAID', async () => {
+      gateway.success = false;
+      await pay('k1');
+      gateway.success = true;
+      const res = await pay('k2');
+
+      expect(res).toMatchObject({ fromCache: false, status: 'PAID' });
+      expect(orderStatus()).toBe('PAID');
+      expect(points()).toBe(102);
+      expect(fake.db.payments.map((p) => p.status)).toEqual(['FAILED', 'PAID']);
+    });
+
+    it('retry thất bại tiếp vẫn về PAYMENT_FAILED, không cộng điểm', async () => {
+      gateway.success = false;
+      await pay('k1');
+      await pay('k2');
+
+      expect(orderStatus()).toBe('PAYMENT_FAILED');
+      expect(points()).toBe(100);
+      expect(fake.db.payments.map((p) => p.status)).toEqual(['FAILED', 'FAILED']);
+    });
   });
 
-  it('marks order PAID and adds reward points when gateway succeeds', async () => {
-    const res = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'key',
-      12,
+  describe('chặn trạng thái không cho phép', () => {
+    it.each(['PAID', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED'])(
+      'đơn %s bị từ chối: không đổi order/payment/điểm, không gọi gateway, không tạo key',
+      async (status) => {
+        seedOrder(status);
+
+        await expect(pay('k1')).rejects.toThrow(BadRequestException);
+
+        expect(orderStatus()).toBe(status);
+        expect(fake.db.payments).toHaveLength(0);
+        expect(points()).toBe(100);
+        expect(gateway.calls).toHaveLength(0);
+        expect(fake.db.keys.size).toBe(0);
+      },
     );
 
-    expect(res.status).toBe('PAID');
-    expect(res.orderStatus).toBe('PAID');
-    expect(res.rewardPointsAdded).toBe(2);
-    expect(prisma.user.update).toHaveBeenCalledTimes(1);
-  });
+    it('đơn PENDING nhưng đã có payment PAID (dữ liệu lệch) bị chặn', async () => {
+      fake.db.payments.push({ id: 99, orderId: ORDER, status: 'PAID' });
 
-  it('marks order PAYMENT_FAILED and adds no points when gateway fails', async () => {
-    gateway.success = false;
-
-    const res = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'key',
-      12,
-    );
-
-    expect(res.status).toBe('FAILED');
-    expect(res.orderStatus).toBe('PAYMENT_FAILED');
-    expect(res.rewardPointsAdded).toBe(0);
-    expect(prisma.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 5, status: 'PENDING' },
-      data: { status: 'PAYMENT_FAILED' },
+      await expect(pay('k1')).rejects.toThrow(/đã được thanh toán/);
+      expect(gateway.calls).toHaveLength(0);
+      expect(points()).toBe(100);
     });
-    expect(prisma.user.update).not.toHaveBeenCalled();
-  });
 
-  it('allows retry with a new key after a failure', async () => {
-    gateway.success = false;
-    await service.create({ orderId: 5, method: 'WALLET' }, 'key-1', 12);
+    it('đơn của người khác => 404, không gọi gateway', async () => {
+      fake.db.orders.get(ORDER).userId = 999;
 
-    gateway.success = true;
-    const res = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'key-2',
-      12,
-    );
-
-    expect(res.status).toBe('PAID');
-    expect(prisma.order.updateMany).toHaveBeenNthCalledWith(2, {
-      where: { id: 5, status: 'PAYMENT_FAILED' },
-      data: { status: 'PENDING' },
+      await expect(pay('k1')).rejects.toThrow(NotFoundException);
+      expect(gateway.calls).toHaveLength(0);
     });
-    expect(prisma.order.updateMany).toHaveBeenNthCalledWith(3, {
-      where: { id: 5, status: 'PENDING' },
-      data: { status: 'PAID' },
+
+    it('thiếu Idempotency-Key => 400', async () => {
+      await expect(
+        service.create({ orderId: ORDER, method: 'MOMO' }, undefined, USER),
+      ).rejects.toThrow(BadRequestException);
+      expect(gateway.calls).toHaveLength(0);
     });
   });
 
-  it.each([
-    'CANCELLED',
-    'COMPLETED',
-    'PREPARING',
-    'READY',
-    'PAID',
-    'UNKNOWN',
-  ])(
-    'rejects payment for an order in %s without changing payment or reward data',
-    async (status) => {
-      currentOrderStatus = status;
-      const charge = jest.spyOn(gateway, 'charge');
+  describe('idempotency', () => {
+    it('gửi lại cùng key => fromCache, gateway/payment/điểm không đổi', async () => {
+      await pay('k1');
+      const again = await pay('k1');
+
+      expect(again).toMatchObject({ fromCache: true, status: 'PAID', rewardPointsAdded: 2 });
+      expect(gateway.calls).toHaveLength(1);
+      expect(fake.db.payments).toHaveLength(1);
+      expect(points()).toBe(102);
+    });
+
+    it('replay cùng key vẫn trả kết quả cũ dù đơn đã sang PREPARING', async () => {
+      await pay('k1');
+      fake.db.orders.get(ORDER).status = 'PREPARING';
+
+      const again = await pay('k1');
+
+      expect(again).toMatchObject({ fromCache: true, status: 'PAID' });
+      expect(orderStatus()).toBe('PREPARING');
+    });
+
+    it('replay kết quả thất bại cũng trả lại FAILED, không thử lại gateway', async () => {
+      gateway.success = false;
+      await pay('k1');
+      gateway.success = true;
+
+      const again = await pay('k1');
+
+      expect(again).toMatchObject({ fromCache: true, status: 'FAILED' });
+      expect(gateway.calls).toHaveLength(1);
+    });
+
+    it('cùng key nhưng đơn khác => 409', async () => {
+      await pay('k1');
+      fake.db.orders.set(6, { id: 6, userId: USER, total: TOTAL, status: 'PENDING' });
 
       await expect(
-        service.create({ orderId: 5, method: 'WALLET' }, `key-${status}`, 12),
-      ).rejects.toThrow(BadRequestException);
-
-      expect(charge).not.toHaveBeenCalled();
-      expect(prisma.procPaymentKey.create).not.toHaveBeenCalled();
-      expect(prisma.payment.create).not.toHaveBeenCalled();
-      expect(prisma.order.updateMany).not.toHaveBeenCalled();
-      expect(prisma.user.update).not.toHaveBeenCalled();
-      expect(currentOrderStatus).toBe(status);
-    },
-  );
-
-  it('does not write payment or points if the order changes during payment', async () => {
-    const charge = jest.spyOn(gateway, 'charge').mockImplementation(async () => {
-      currentOrderStatus = 'CANCELLED';
-      return { success: true };
+        service.create({ orderId: 6, method: 'MOMO' }, 'k1', USER),
+      ).rejects.toThrow(ConflictException);
     });
 
-    await expect(
-      service.create({ orderId: 5, method: 'WALLET' }, 'concurrent-key', 12),
-    ).rejects.toThrow(ConflictException);
-
-    expect(charge).toHaveBeenCalledTimes(1);
-    expect(prisma.payment.create).not.toHaveBeenCalled();
-    expect(prisma.user.update).not.toHaveBeenCalled();
-  });
-
-  it('replays an unresolved gateway request with the same key', async () => {
-    const charge = jest
-      .spyOn(gateway, 'charge')
-      .mockRejectedValueOnce(new Error('Gateway response timed out'))
-      .mockResolvedValueOnce({ success: true });
-
-    await expect(
-      service.create({ orderId: 5, method: 'WALLET' }, 'uncertain-key', 12),
-    ).rejects.toThrow('Gateway response timed out');
-
-    expect(paymentKeys.get('uncertain-key')?.response).toContain(
-      '"status":"PROCESSING"',
-    );
-
-    const result = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'uncertain-key',
-      12,
-    );
-
-    expect(result.status).toBe('PAID');
-    expect(result.fromCache).toBe(true);
-    expect(charge).toHaveBeenNthCalledWith(
-      1,
-      5,
-      25000,
-      'WALLET',
-      'uncertain-key',
-    );
-    expect(charge).toHaveBeenNthCalledWith(
-      2,
-      5,
-      25000,
-      'WALLET',
-      'uncertain-key',
-    );
-    expect(prisma.payment.create).toHaveBeenCalledTimes(1);
-  });
-
-  it('replays a confirmed failure for the same key and accepts a new key for a new attempt', async () => {
-    gateway.success = false;
-    const failedResult = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'failed-key',
-      12,
-    );
-    const charge = jest.spyOn(gateway, 'charge');
-
-    const replay = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'failed-key',
-      12,
-    );
-    expect(replay).toMatchObject({ fromCache: true, status: 'FAILED' });
-    expect(charge).not.toHaveBeenCalled();
-
-    gateway.success = true;
-    const retry = await service.create(
-      { orderId: 5, method: 'WALLET' },
-      'new-attempt-key',
-      12,
-    );
-    expect(failedResult.status).toBe('FAILED');
-    expect(retry.status).toBe('PAID');
-    expect(prisma.payment.create).toHaveBeenCalledTimes(2);
-  });
-
-  it('rejects reusing a key for another order or payment method', async () => {
-    await service.create({ orderId: 5, method: 'WALLET' }, 'bound-key', 12);
-
-    await expect(
-      service.create({ orderId: 5, method: 'CARD' }, 'bound-key', 12),
-    ).rejects.toThrow(ConflictException);
-  });
-
-  it('does not create a processing key for an already paid order', async () => {
-    prisma.payment.findFirst.mockResolvedValue({
-      id: 1,
-      orderId: 5,
-      status: 'PAID',
+    it('cùng key nhưng đổi method => 409', async () => {
+      await pay('k1', 'MOMO');
+      await expect(pay('k1', 'WALLET')).rejects.toThrow(ConflictException);
     });
 
-    await expect(
-      service.create({ orderId: 5, method: 'WALLET' }, 'new-key', 12),
-    ).rejects.toThrow(BadRequestException);
-    expect(prisma.procPaymentKey.create).not.toHaveBeenCalled();
+    it('kết quả cũ (định dạng trước khi có PROCESSING) vẫn replay được', async () => {
+      fake.db.keys.set('old', {
+        key: 'old',
+        response: JSON.stringify({
+          status: 'PAID',
+          payment: { orderId: ORDER, method: 'MOMO' },
+          rewardPointsAdded: 2,
+        }),
+      });
+
+      const res = await pay('old', 'MOMO');
+      expect(res).toMatchObject({ fromCache: true, status: 'PAID' });
+      expect(gateway.calls).toHaveLength(0);
+    });
+  });
+
+  describe('lỗi giữa chừng', () => {
+    it('gateway lỗi mạng => key còn PROCESSING; gọi lại cùng key hoàn tất đúng một lần', async () => {
+      const original = gateway.charge.bind(gateway);
+      let first = true;
+      gateway.charge = async (...args: Parameters<typeof original>) => {
+        if (first) {
+          first = false;
+          throw new Error('network');
+        }
+        return original(...args);
+      };
+
+      await expect(pay('k1')).rejects.toThrow('network');
+      expect(JSON.parse(fake.db.keys.get('k1').response).status).toBe('PROCESSING');
+      expect(orderStatus()).toBe('PENDING');
+      expect(fake.db.payments).toHaveLength(0);
+
+      const res = await pay('k1');
+
+      expect(res).toMatchObject({ status: 'PAID' });
+      expect(fake.db.payments).toHaveLength(1);
+      expect(points()).toBe(102);
+    });
+
+    it('đơn bị huỷ trong lúc gọi gateway => 409, không đổi order/payment/điểm', async () => {
+      gateway.onCharge = () => {
+        fake.db.orders.get(ORDER).status = 'CANCELLED';
+      };
+
+      await expect(pay('k1')).rejects.toThrow(ConflictException);
+
+      expect(orderStatus()).toBe('CANCELLED');
+      expect(fake.db.payments).toHaveLength(0);
+      expect(points()).toBe(100);
+    });
   });
 });
