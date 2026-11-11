@@ -24,7 +24,13 @@ export class OrdersService {
       const orderItemsData: Prisma.OrderItemCreateWithoutOrderInput[] = [];
 
       // 1. Kiểm tra tồn kho sơ bộ và trừ tồn kho nguyên tử (Optimistic Locking)
-      for (const item of createOrderDto.items) {
+      // Luôn khóa/trừ kho theo thứ tự productId tăng dần để hai đơn có cùng sản phẩm
+      // nhưng thứ tự khác nhau không khóa chéo nhau (deadlock). Thứ tự món trong đơn giữ nguyên.
+      const itemsByProductId = createOrderDto.items
+        .map((item, index) => ({ item, index }))
+        .sort((a, b) => Number(a.item.productId) - Number(b.item.productId));
+
+      for (const { item, index } of itemsByProductId) {
         const product = await tx.product.findUnique({
           where: { id: Number(item.productId) },
         });
@@ -94,7 +100,7 @@ export class OrdersService {
 
         calculatedTotal += itemUnitPrice * item.quantity;
 
-        orderItemsData.push(orderItemPayload);
+        orderItemsData[index] = orderItemPayload;
       }
 
       // 2. Kiểm tra Voucher giảm giá
