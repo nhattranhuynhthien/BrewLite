@@ -1,0 +1,16 @@
+services:
+  test-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: brewlite_test
+      POSTGRES_PASSWORD: brewlite_test
+      POSTGRES_DB: brewlite_test
+    ports:
+      - "127.0.0.1:${TEST_DB_PORT:-5434}:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brewlite_test -d brewlite_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

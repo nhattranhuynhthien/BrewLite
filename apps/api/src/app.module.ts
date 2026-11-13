@@ -7,6 +7,7 @@ import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
 import { AuthModule } from './auth/auth.module';
 import { ToppingsModule } from './toppings/toppings.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ToppingsModule } from './toppings/toppings.module';
     PaymentsModule,
     AuthModule, 
     ToppingsModule,
+    HealthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

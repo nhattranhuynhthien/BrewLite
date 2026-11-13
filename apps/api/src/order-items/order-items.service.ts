@@ -7,7 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class OrderItemsService {
   constructor(private prisma: PrismaService) {}
 
-  create(createOrderItemDto: CreateOrderItemDto) {
+  create(_createOrderItemDto: CreateOrderItemDto) {
     return 'This action adds a new order item';
   }
 
@@ -21,7 +21,7 @@ export class OrderItemsService {
     });
   }
 
-  update(id: number, updateOrderItemDto: UpdateOrderItemDto) {
+  update(id: number, _updateOrderItemDto: UpdateOrderItemDto) {
     return `This action updates a #${id} order item`;
   }
 
