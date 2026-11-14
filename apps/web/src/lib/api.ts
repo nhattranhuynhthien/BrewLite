@@ -70,7 +70,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       message = `API trả về phản hồi không hợp lệ (${response.status}). Vui lòng kiểm tra URL backend.`;
     }
     if (response.status === 401) {
-      setAccessToken(null);
+      // An old in-flight request must not sign out an account selected meanwhile.
+      if (headers.get('Authorization') === `Bearer ${getAccessToken()}`) setAccessToken(null);
       message = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
     }
     throw new ApiError(message, response.status);
