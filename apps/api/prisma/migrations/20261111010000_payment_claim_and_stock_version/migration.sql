@@ -1,0 +1,2 @@
+ALTER TABLE "Order" ADD COLUMN "paymentAttemptKey" TEXT;
+ALTER TABLE "Product" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 0;
