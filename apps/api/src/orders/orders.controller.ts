@@ -1,5 +1,5 @@
 import { IntIdPipe } from '../common/int-id.pipe';
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req, Headers } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
@@ -16,8 +16,8 @@ export class OrdersController {
 
   @UseGuards(AuthGuard)
   @Post()
-  create(@Req() request: AuthenticatedRequest, @Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(request.user.sub, createOrderDto);
+  create(@Req() request: AuthenticatedRequest, @Body() createOrderDto: CreateOrderDto, @Headers('idempotency-key') key?: string) {
+    return this.ordersService.create(request.user.sub, createOrderDto, key);
   }
 
   @UseGuards(AuthGuard)

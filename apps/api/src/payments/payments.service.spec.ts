@@ -31,7 +31,7 @@ function createFakePrisma() {
       },
       updateMany: async ({ where, data }: any) => {
         const o = db.orders.get(where.id);
-        if (!o || (where.status !== undefined && o.status !== where.status)) {
+        if (!o || (where.status !== undefined && o.status !== where.status) || (where.OR && o.paymentAttemptKey != null && o.paymentAttemptKey !== data.paymentAttemptKey)) {
           return { count: 0 };
         }
         Object.assign(o, data);

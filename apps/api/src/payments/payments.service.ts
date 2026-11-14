@@ -29,6 +29,9 @@ export class PaymentsService {
     if (!idempotencyKey) {
       throw new BadRequestException('Thiếu Idempotency-Key trong Header');
     }
+    if (!idempotencyKey.trim() || idempotencyKey.length > 200) {
+      throw new BadRequestException('Idempotency-Key phải có từ 1 đến 200 ký tự.');
+    }
 
     const { orderId, method, amount } = createPaymentDto;
     const order = await this.prisma.order.findUnique({
@@ -37,6 +40,10 @@ export class PaymentsService {
 
     if (!order || order.userId !== userId) {
       throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
+    }
+
+    if (order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException('Đơn hàng đã hủy, không thể thanh toán hoặc phát lại kết quả thanh toán.');
     }
 
     if (amount !== undefined && amount < order.total) {
@@ -109,8 +116,30 @@ export class PaymentsService {
       }
     }
 
+    // Persist ownership before the external side effect. A network error retains
+    // this key so only the original attempt can reconcile an unknown result.
+    const ownership = await this.prisma.order.updateMany({
+      where: {
+        id: orderId,
+        status: order.status,
+        OR: [{ paymentAttemptKey: null }, { paymentAttemptKey: idempotencyKey }],
+      },
+      data: { paymentAttemptKey: idempotencyKey },
+    });
+    if (ownership.count !== 1) {
+      const completed = await this.prisma.procPaymentKey.findUnique({ where: { key: idempotencyKey } });
+      if (completed) {
+        const cached = JSON.parse(completed.response);
+        this.assertSameRequest(cached, orderId, method);
+        if (cached.status !== 'PROCESSING' && cached.status !== 'FINALIZING') {
+          return { fromCache: true, idempotencyKey, ...cached };
+        }
+      }
+      throw new ConflictException('Đơn hàng đang được thanh toán bằng yêu cầu khác.');
+    }
+
     // The gateway must deduplicate repeated calls using this same key.
-    const { success } = await this.gateway.charge(
+    const { success } = order.total === 0 ? { success: true } : await this.gateway.charge(
       orderId,
       order.total,
       method,
@@ -173,7 +202,7 @@ export class PaymentsService {
       assertTransition(expectedStatus, orderStatus);
       const orderTransition = await tx.order.updateMany({
         where: { id: orderId, status: expectedStatus },
-        data: { status: orderStatus },
+        data: { status: orderStatus, paymentAttemptKey: success ? idempotencyKey : null },
       });
       if (orderTransition.count !== 1) {
         throw new ConflictException(
@@ -188,7 +217,7 @@ export class PaymentsService {
         throw new NotFoundException(`Không tìm thấy đơn hàng mã số: ${orderId}`);
       }
       const payment = await tx.payment.create({
-        data: { orderId, method, amount: order.total, status: paymentStatus },
+        data: { orderId, method, amount: order.total, status: paymentStatus, paidOrderId: success ? orderId : null },
       });
       if (success) {
         await tx.user.update({
