@@ -17,7 +17,7 @@
 .menu-hero__inner { position: relative; max-width: 1200px; margin: 0 auto; padding: 28px 24px; }
 .menu-hero__script {
   margin: 0;
-  font-family: 'Playfair Display', Georgia, serif;
+  font-family: var(--serif);
   font-style: italic;
   font-size: 1.6rem;
   color: var(--green);
@@ -72,20 +72,20 @@
   border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.82rem; cursor: pointer;
 }
 .menu-section__more:hover { color: var(--green); }
-.menu-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+.menu-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
 
 /* Card */
-.menu-card { background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(31, 42, 34, 0.06); transition: box-shadow 0.25s ease, transform 0.25s ease; }
+.menu-card { min-width: 0; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(31, 42, 34, 0.06); transition: box-shadow 0.25s ease, transform 0.25s ease; }
 .menu-card__detail { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .menu-card__detail:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
 .menu-card__img { position: relative; aspect-ratio: 1 / 0.86; background: #efede4; }
 .menu-card__img img { object-fit: cover; }
-.menu-card__body { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 10px 12px 12px; }
-.menu-card__name { margin: 0; font-size: 0.82rem; font-weight: 500; }
-.menu-card__price { font-size: 0.85rem; font-weight: 700; color: var(--green); }
+.menu-card__body { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; padding: 10px 12px 12px; }
+.menu-card__copy { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.menu-card__name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; min-height: 2.7em; margin: 0; font-size: 0.82rem; line-height: 1.35; font-weight: 500; }
+.menu-card__price { font-size: 0.85rem; font-weight: 700; color: var(--green); white-space: nowrap; }
 .menu-card__add {
-  position: absolute; right: 12px; bottom: 12px;
-  width: 24px; height: 24px; border: 0; border-radius: 50%;
+  width: 28px; height: 28px; border: 0; border-radius: 50%;
   display: grid; place-items: center; background: var(--green); color: #fff; cursor: pointer;
   transition: transform 0.15s ease, background 0.15s ease;
 }
@@ -98,14 +98,14 @@
 }
 
 /* Responsive */
-@media (max-width: 1024px) { .menu-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1024px) { .menu-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
   .menu-layout { grid-template-columns: 1fr; gap: 20px; }
   .menu-side { position: static; }
   .menu-tabs { display: flex; overflow-x: auto; gap: 6px; }
   .menu-tab { white-space: nowrap; flex: none; }
   .menu-promo { display: none; }
-  .menu-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .menu-hero__desc { max-width: 60%; }
 }
 @media (prefers-reduced-motion: reduce) {

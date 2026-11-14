@@ -234,7 +234,7 @@ export default function Storefront({
     const query = searchQuery.trim().toLocaleLowerCase('vi');
     const featuredProducts = products.slice(0, 16);
     return query
-      ? featuredProducts.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
+      ? products.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
       : featuredProducts;
   }, [products, searchQuery]);
   const subtotal = useMemo(

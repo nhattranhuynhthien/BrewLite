@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import {
   Coffee,
   Leaf,
@@ -12,6 +13,7 @@ import {
   LayoutGrid,
   ChevronRight,
   ArrowRight,
+  Gift,
   type LucideIcon,
 } from 'lucide-react';
 import ProductCard from '../components/ProductCard';
@@ -70,8 +72,8 @@ export default function MenuPage() {
         navItems={[
           { label: 'Trang chủ', href: '/' },
           { label: 'Menu', href: '/menu', active: true },
-          { label: 'Khuyến mãi', href: '#menu-promo' },
-          { label: 'Giới thiệu', href: '#menu-intro' },
+          { label: 'Khuyến mãi', href: '/#promotions' },
+          { label: 'Giới thiệu', href: '/#about' },
         ]}
         onSearchChange={setSearchQuery}
         cartHref="/cart"
@@ -117,17 +119,17 @@ export default function MenuPage() {
             </nav>
 
             <div className="menu-promo" id="menu-promo">
-              <Leaf size={18} />
+              <Gift size={20} />
               <p>
-                Đặt hàng online
+                Ưu đãi <strong>GIAM10</strong>
                 <br />
-                nhanh chóng
+                Giảm 10% tối đa 50k
                 <br />
-                và tiện lợi
+                Tích lũy điểm thưởng
               </p>
-              <button type="button" className="menu-promo__btn" aria-label="Đặt hàng online">
+              <Link href="/#promotions" className="menu-promo__btn" aria-label="Xem chi tiết ưu đãi">
                 <ArrowRight size={16} />
-              </button>
+              </Link>
             </div>
           </aside>
 

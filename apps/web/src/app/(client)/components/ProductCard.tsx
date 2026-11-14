@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import Image from 'next/image';
 import { Plus } from 'lucide-react';
 import type { Product } from '@/types/product';
@@ -31,20 +30,27 @@ export default function ProductCard({ product, onSelect }: Props) {
             />
           )}
         </div>
-        <div className="menu-card__body">
+      </button>
+      <div className="menu-card__body">
+        <button
+          type="button"
+          className="menu-card__detail menu-card__copy"
+          onClick={() => onSelect(product)}
+          aria-label={`Xem chi tiết ${product.name}`}
+        >
           <h3 className="menu-card__name">{product.name}</h3>
           <span className="menu-card__price">{formatPrice(product.price)}</span>
-        </div>
-      </button>
-      <button
-        type="button"
-        className="menu-card__add"
-        aria-label={`Xem chi tiết ${product.name}`}
-        disabled={!product.isAvailable || product.stock <= 0}
-        onClick={() => onSelect(product)}
-      >
-        <Plus size={16} strokeWidth={2.5} />
-      </button>
+        </button>
+        <button
+          type="button"
+          className="menu-card__add"
+          aria-label={`Xem chi tiết ${product.name}`}
+          disabled={!product.isAvailable || product.stock <= 0}
+          onClick={() => onSelect(product)}
+        >
+          <Plus size={16} strokeWidth={2.5} />
+        </button>
+      </div>
     </article>
   );
 }

@@ -1,37 +1,30 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
+import { apiFetch, getAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 
-export type AuthUser = {
-  id: number;
-  email: string;
-  name: string | null;
-  role: string;
-};
+export type AuthUser = { id: number; email: string; name: string | null };
 
 export function useAuthUser() {
   const router = useRouter();
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [ready, setReady] = useState(false);
-
-  // Đọc localStorage trong useEffect để tránh lệch HTML giữa server và client
+  const token = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
+  const [profile, setProfile] = useState<{ token: string; user: AuthUser | null } | null>(null);
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('user');
-      setUser(raw ? (JSON.parse(raw) as AuthUser) : null);
-    } catch {
-      setUser(null);
-    }
-    setReady(true);
-  }, []);
-
+    if (!token) return;
+    let active = true;
+    apiFetch<AuthUser>('/users/me')
+      .then(user => { if (active) setProfile({ token, user }); })
+      .catch(() => { if (active) setProfile({ token, user: null }); });
+    return () => { active = false; };
+  }, [token]);
   const logout = useCallback(() => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setUser(null);
-    router.push('/login');
+    setAccessToken(null);
+    router.push('/');
   }, [router]);
-
-  return { user, ready, logout };
+  return {
+    user: token && profile?.token === token ? profile.user : null,
+    ready: !token || profile?.token === token,
+    logout,
+  };
 }
