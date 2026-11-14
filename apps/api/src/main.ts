@@ -32,4 +32,7 @@ async function bootstrap() {
   const port = process.env.PORT ?? 4000;
   await app.listen(port, '0.0.0.0');
 }
-bootstrap();
+void bootstrap().catch((error: unknown) => {
+  console.error('Không thể khởi động API', error);
+  process.exitCode = 1;
+});

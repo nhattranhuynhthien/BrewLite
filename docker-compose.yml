@@ -26,11 +26,12 @@ services:
     environment:
       PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:-brewlite}:${POSTGRES_PASSWORD:-brewlite123}@db:5432/${POSTGRES_DB:-brewlite_db}?schema=public
-      JWT_SECRET: ${JWT_SECRET:-brewlite_super_secret_jwt_key_2026}
+      JWT_SECRET: ${JWT_SECRET:?Set a private JWT_SECRET of at least 32 bytes}
+      ORDER_OPERATOR_USER_IDS: ${ORDER_OPERATOR_USER_IDS:-}
     depends_on:
       db:
         condition: service_healthy
-    command: ["sh", "-c", "npx prisma migrate deploy --schema=prisma/schema.prisma && npm run start:prod"]
+    command: ["sh", "-c", "npx prisma migrate deploy --schema=prisma/schema.prisma && npx prisma db seed && npm run start:prod"]
 
   frontend:
     build:

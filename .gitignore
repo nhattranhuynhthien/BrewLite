@@ -25,4 +25,5 @@ out/
 *.tsbuildinfo
 /mydocs
 /frontend
+/.tmp/
 
