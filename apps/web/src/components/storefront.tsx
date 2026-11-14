@@ -3,16 +3,23 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import Image from 'next/image';
 import {
+  ArrowRight,
   Award,
   CalendarDays,
   Check,
+  CheckCheck,
   ChevronDown,
   ClipboardList,
+  Clock,
   Coffee,
+  Copy,
   CreditCard,
   Gift,
+  Leaf,
   MapPin,
   Search,
+  ShieldCheck,
+  Sparkles,
   Tag,
   WalletCards,
 } from 'lucide-react';
@@ -167,9 +174,18 @@ export default function Storefront({
   const [usePoints, setUsePoints] = useState(false);
   const [pointsToUse, setPointsToUse] = useState(0);
   const [receipt, setReceipt] = useState<{ id: number | string; total?: number; status: string } | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<number | string | null>(null);
   const [cancelMessage, setCancelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const checkoutInFlight = useRef(false);
+
+  function handleCopyVoucher(code: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(code).catch(() => {});
+    }
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 2500);
+  }
 
   async function cancelOrder(orderId: number | string) {
     if (!window.confirm(`Bạn có chắc chắn muốn hủy đơn hàng #${orderId} không?`)) return;
@@ -191,6 +207,19 @@ export default function Storefront({
       });
     } finally {
       setCancellingOrderId(null);
+    }
+  }
+
+  function navigateToSection(sectionId: string) {
+    if (view !== 'menu') {
+      setView('menu');
+      setTimeout(() => {
+        const el = document.getElementById(sectionId);
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }, 60);
+    } else {
+      const el = document.getElementById(sectionId);
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
     }
   }
 
@@ -505,10 +534,10 @@ export default function Storefront({
     <>
       <SiteHeader
         navItems={[
-          { label: 'Trang chủ', href: '/', active: true },
-          { label: 'Menu', href: '/menu' },
-          { label: 'Khuyến mãi', href: '/menu#menu-promo' },
-          { label: 'Giới thiệu', href: '/menu#menu-intro' },
+          { label: 'Trang chủ', href: '#top', active: view === 'menu', onClick: () => navigateToSection('top') },
+          { label: 'Menu', href: '/menu', onClick: () => navigateToSection('menu') },
+          { label: 'Khuyến mãi', href: '#promotions', onClick: () => navigateToSection('promotions') },
+          { label: 'Giới thiệu', href: '#about', onClick: () => navigateToSection('about') },
         ]}
         onSearchChange={setSearchQuery}
         onSearchOpen={() => setView('menu')}
@@ -583,6 +612,190 @@ export default function Storefront({
               <div><span>✳</span><p><strong>Hạt tuyển chọn</strong><br />Rang mới mỗi tuần</p></div>
               <div><span>⌁</span><p><strong>Pha chế thủ công</strong><br />Chăm chút từng ly</p></div>
               <div><span>♡</span><p><strong>Nhận tại cửa hàng</strong><br />Nhanh chóng, tiện lợi</p></div>
+            </div>
+          </div>
+        </section>
+
+        {/* SECTION: KHUYẾN MÃI & TÍCH ĐIỂM */}
+        <section className="promo-section" id="promotions">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow"><Gift size={13} /> ƯU ĐÃI ĐẶC QUYỀN</span>
+              <h2>Chương trình Khuyến mãi & Tích điểm</h2>
+            </div>
+            <span className="menu-subtitle">Tiết kiệm nhiều hơn · Thưởng thức trọn vẹn</span>
+          </div>
+
+          <div className="promo-grid">
+            <article className="promo-card promo-card--featured">
+              <div className="promo-card__badge">GIẢM 10%</div>
+              <div className="promo-card__body">
+                <div className="promo-card__icon-wrap">
+                  <Tag size={24} />
+                </div>
+                <h3>Ưu đãi đặt món trực tuyến</h3>
+                <p>Giảm ngay 10% trên tổng giá trị đơn hàng (tối đa 50.000đ) khi đặt món qua hệ thống BrewLite.</p>
+                <div className="promo-code-box">
+                  <span className="promo-code-text">Mã: <strong>GIAM10</strong></span>
+                  <button
+                    type="button"
+                    className="promo-copy-btn"
+                    onClick={() => handleCopyVoucher('GIAM10')}
+                  >
+                    {copiedCode === 'GIAM10' ? <><CheckCheck size={14} /> Đã sao chép</> : <><Copy size={14} /> Sao chép</>}
+                  </button>
+                </div>
+                <div className="promo-card__footer">
+                  <small>Hạn dùng: Đang áp dụng · Không giới hạn số lần</small>
+                </div>
+              </div>
+            </article>
+
+            <article className="promo-card">
+              <div className="promo-card__badge promo-card__badge--gold">HOÀN TIỀN 10%</div>
+              <div className="promo-card__body">
+                <div className="promo-card__icon-wrap promo-card__icon-wrap--gold">
+                  <Award size={24} />
+                </div>
+                <h3>Tích điểm BrewLite Rewards</h3>
+                <p>Tích lũy <strong>1 điểm cho mỗi 10.000đ</strong> thanh toán. Đổi <strong>1 điểm = 1.000đ</strong> trừ trực tiếp vào đơn hàng kế tiếp!</p>
+                <div className="promo-loyalty-highlight">
+                  <div className="promo-loyalty-stat">
+                    <strong>10.000đ</strong>
+                    <span>Chi tiêu = 1 điểm</span>
+                  </div>
+                  <div className="promo-loyalty-arrow">➜</div>
+                  <div className="promo-loyalty-stat">
+                    <strong>1.000đ</strong>
+                    <span>Giảm / 1 điểm</span>
+                  </div>
+                </div>
+                <div className="promo-card__footer">
+                  <small>Tự động tích lũy vào tài khoản ngay khi hoàn tất đơn</small>
+                </div>
+              </div>
+            </article>
+
+            <article className="promo-card">
+              <div className="promo-card__badge promo-card__badge--green">TIỆN LỢI</div>
+              <div className="promo-card__body">
+                <div className="promo-card__icon-wrap promo-card__icon-wrap--green">
+                  <Sparkles size={24} />
+                </div>
+                <h3>Đặt trước - Nhận tại quầy</h3>
+                <p>Chủ động thời gian, không cần xếp hàng chờ đợi. Đồ uống luôn tươi mới và sẵn sàng khi bạn ghé quán.</p>
+                <ul className="promo-benefits-list">
+                  <li><Check size={14} /> 0đ phí giao hàng, nhận món nhanh</li>
+                  <li><Check size={14} /> Đảm bảo độ mát lạnh & hương vị chuẩn xác</li>
+                  <li><Check size={14} /> Tùy chọn lượng đá, độ ngọt theo ý muốn</li>
+                </ul>
+                <div className="promo-card__footer">
+                  <button
+                    type="button"
+                    onClick={() => navigateToSection('menu')}
+                    className="button button-primary button-full promo-order-btn"
+                  >
+                    Khám phá thực đơn <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div className="promo-guide-strip">
+            <div className="promo-guide-item">
+              <span className="promo-guide-step">01</span>
+              <div>
+                <strong>Đăng ký / Đăng nhập</strong>
+                <p>Để theo dõi lịch sử đơn và tự động tích lũy điểm thưởng cho tài khoản.</p>
+              </div>
+            </div>
+            <div className="promo-guide-item">
+              <span className="promo-guide-step">02</span>
+              <div>
+                <strong>Chọn món & Tùy biến</strong>
+                <p>Tự do lựa chọn size ly, mức đá, độ ngọt và topping tươi giòn.</p>
+              </div>
+            </div>
+            <div className="promo-guide-item">
+              <span className="promo-guide-step">03</span>
+              <div>
+                <strong>Áp dụng ưu đãi & Nhận nước</strong>
+                <p>Nhập mã <strong>GIAM10</strong> hoặc trừ điểm thưởng tại bước thanh toán.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* SECTION: GIỚI THIỆU VỀ BREWLITE */}
+        <section className="about-section" id="about">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow"><Coffee size={13} /> VỀ BREWLITE</span>
+              <h2>Good Drink - Good Day</h2>
+            </div>
+            <span className="menu-subtitle">Mỗi ngày một chút dịu dàng · Tử tế từ từng hạt cà phê</span>
+          </div>
+
+          <div className="about-layout">
+            <div className="about-story-card">
+              <span className="about-quote-mark">“</span>
+              <h3>Khởi nguồn từ niềm đam mê cà phê và trà mộc Việt Nam</h3>
+              <p>
+                BrewLite bắt đầu từ một ý niệm giản dị: giữa những bận rộn hối hả thường nhật, một ly nước ngon pha bằng sự tử tế có thể thắp sáng cả một ngày của bạn.
+              </p>
+              <p>
+                Chúng tôi trân trọng từng hạt cà phê Robusta đậm đà từ Buôn Ma Thuột, Arabica thanh khiết Cầu Đất (Đà Lạt), và những búp trà xanh mộc mạc tuyển chọn từ vùng chè Bảo Lộc. Tất cả đều được rang mới đều đặn mỗi tuần để giữ trọn vẹn hương vị tự nhiên và tươi mới nhất.
+              </p>
+              <div className="about-signature">
+                <strong>Đội ngũ BrewLite</strong>
+                <small>Tận tâm phục vụ bạn mỗi ngày</small>
+              </div>
+            </div>
+
+            <div className="about-pillars">
+              <article className="about-pillar-card">
+                <div className="about-pillar-icon"><Leaf size={22} /></div>
+                <div className="about-pillar-content">
+                  <h4>Nguyên liệu mộc tuyển chọn</h4>
+                  <p>100% nông sản sạch từ cao nguyên Việt Nam. Rang mộc nguyên bản, không hương liệu tổng hợp hay chất bảo quản độc hại.</p>
+                </div>
+              </article>
+
+              <article className="about-pillar-card">
+                <div className="about-pillar-icon"><Clock size={22} /></div>
+                <div className="about-pillar-content">
+                  <h4>Pha chế thủ công & Tùy biến</h4>
+                  <p>Pha mới ngay khi có đơn. Tự do tùy biến size ly, lượng đá, độ ngọt (100%, 70%, 50%, 30%) và topping tươi giòn.</p>
+                </div>
+              </article>
+
+              <article className="about-pillar-card">
+                <div className="about-pillar-icon"><ShieldCheck size={22} /></div>
+                <div className="about-pillar-content">
+                  <h4>Bền vững & Thân thiện môi trường</h4>
+                  <p>Ưu tiên sử dụng ly giấy, ống hút giấy và bao bì phân hủy sinh học vì môi trường sống xanh và sức khỏe cộng đồng.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div className="about-metrics-strip">
+            <div className="about-metric-item">
+              <strong>100%</strong>
+              <span>Cà phê & Trà mộc sạch</span>
+            </div>
+            <div className="about-metric-item">
+              <strong>40+</strong>
+              <span>Thức uống & Bánh ngọt đa dạng</span>
+            </div>
+            <div className="about-metric-item">
+              <strong>&lt; 5 phút</strong>
+              <span>Thời gian chuẩn bị nhận tại quầy</span>
+            </div>
+            <div className="about-metric-item">
+              <strong>4.9 ★</strong>
+              <span>Đánh giá hài lòng từ khách hàng</span>
             </div>
           </div>
         </section>
@@ -1031,7 +1244,36 @@ export default function Storefront({
         />
       )}
 
-      <footer className="site-footer"><a className="brand footer-brand" href="#top"><span className="brand-mark">B</span><span>Brew<span>Lite</span></span></a><span>Cà phê tử tế, mỗi ngày.</span><span>© BrewLite 2026</span></footer>
+      <footer className="site-footer">
+        <div className="site-footer__main">
+          <div className="site-footer__brand-col">
+            <a className="brand footer-brand" href="#top"><span className="brand-mark">B</span><span>Brew<span>Lite</span></span></a>
+            <p>Thương hiệu cà phê và trà mộc tử tế. Đặt món trực tuyến nhanh chóng, nhận đồ uống tươi ngon tại quầy.</p>
+            <div className="site-footer__contact">
+              <span>Hotline: <strong>0909 123 456</strong></span>
+              <span>Giờ mở cửa: <strong>07:00 - 22:00</strong> mỗi ngày</span>
+            </div>
+          </div>
+          <div className="site-footer__links-col">
+            <h4>Khám phá</h4>
+            <a href="#top" onClick={() => navigateToSection('top')}>Trang chủ</a>
+            <a href="#menu" onClick={() => navigateToSection('menu')}>Thực đơn</a>
+            <a href="#promotions" onClick={() => navigateToSection('promotions')}>Khuyến mãi & Vouchers</a>
+            <a href="#about" onClick={() => navigateToSection('about')}>Về BrewLite</a>
+          </div>
+          <div className="site-footer__links-col">
+            <h4>Hội viên & Đơn hàng</h4>
+            <button type="button" onClick={() => { setAuthMode('login'); setAuthOpen(true); }}>Đăng nhập / Đăng ký</button>
+            <button type="button" onClick={openHistory}>Lịch sử đơn hàng</button>
+            <a href="#promotions" onClick={() => navigateToSection('promotions')}>Chính sách tích điểm</a>
+            <a href="/cart">Giỏ hàng ({items.reduce((s, i) => s + i.quantity, 0)})</a>
+          </div>
+        </div>
+        <div className="site-footer__bottom">
+          <span>© 2026 BrewLite. Good Drink - Good Day.</span>
+          <span>Bảo vệ thông tin & cam kết vệ sinh an toàn thực phẩm.</span>
+        </div>
+      </footer>
 
       {authOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAuthOpen(false); }} role="presentation">
         <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
