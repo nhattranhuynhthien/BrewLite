@@ -1,10 +1,12 @@
 import { IntIdPipe } from '../common/int-id.pipe';
-import { Controller, Get, Post, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/authenticated-request';
+import { OrderOperatorGuard } from './order-operator.guard';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 
 @ApiTags('Orders')
 @ApiBearerAuth()
@@ -28,8 +30,23 @@ export class OrdersController {
   @Get(':id')
   findOne(
     @Req() request: AuthenticatedRequest,
-    @Param('id') id: number,
+    @Param('id', IntIdPipe) id: number,
   ) {
     return this.ordersService.findForUser(id, request.user.sub);
+  }
+
+  @UseGuards(AuthGuard)
+  @Patch(':id/cancel')
+  cancel(
+    @Param('id', IntIdPipe) id: number,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.ordersService.cancel(id, request.user.sub);
+  }
+
+  @UseGuards(AuthGuard, OrderOperatorGuard)
+  @Patch(':id/status')
+  updateStatus(@Param('id', IntIdPipe) id: number, @Body() body: UpdateOrderStatusDto) {
+    return this.ordersService.update(id, body);
   }
 }

@@ -7,7 +7,7 @@ import {
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
-import { assertTransition } from './order-status';
+import { assertTransition, OrderStatus } from './order-status';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
@@ -217,6 +217,79 @@ export class OrdersService {
     });
     if (!order) throw new NotFoundException(`Không tìm thấy đơn hàng ${id}`);
     return order;
+  }
+
+  async cancel(orderId: number, userId: number) {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: { id: orderId, userId },
+        include: { items: true, payment: true },
+      });
+      if (!order) throw new NotFoundException('Không tìm thấy đơn');
+
+      const cancellableStatuses: string[] = [
+        OrderStatus.PENDING,
+        OrderStatus.PAYMENT_FAILED,
+        OrderStatus.PAID,
+      ];
+      if (!cancellableStatuses.includes(order.status)) {
+        throw new BadRequestException('Đơn đã được pha chế, không thể hủy');
+      }
+
+      const cancellation = await tx.order.updateMany({
+        where: { id: orderId, userId, status: order.status, ...(order.status === OrderStatus.PAID ? {} : { paymentAttemptKey: null }) },
+        data: { status: OrderStatus.CANCELLED },
+      });
+      if (cancellation.count !== 1) {
+        throw new ConflictException(
+          'Trạng thái đơn hàng đã thay đổi. Vui lòng thử lại.',
+        );
+      }
+
+      for (const item of [...order.items].sort((a, b) => a.productId - b.productId)) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { stock: { increment: item.quantity }, version: { increment: 1 } },
+        });
+      }
+
+      if (order.promotionId) {
+        await tx.promotion.update({
+          where: { id: order.promotionId },
+          data: { usageLimit: { increment: 1 } },
+        });
+      }
+      if (order.pointsUsed > 0) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { rewardPoints: { increment: order.pointsUsed } },
+        });
+      }
+
+      if (order.status === OrderStatus.PAID) {
+        const points = Math.floor(order.total / 10000);
+        if (points > 0) {
+          const reversal = await tx.user.updateMany({
+            where: { id: userId, rewardPoints: { gte: points } },
+            data: { rewardPoints: { decrement: points } },
+          });
+          if (reversal.count !== 1) throw new ConflictException('Không đủ điểm để hoàn tác điểm thưởng của đơn.');
+        }
+        await tx.payment.updateMany({
+          where: { orderId, status: 'PAID' },
+          data: { status: 'REFUNDED', paidOrderId: null },
+        });
+      }
+
+      const cancelledOrder = await tx.order.findUnique({
+        where: { id: orderId },
+        include: { items: true, payment: true },
+      });
+      if (!cancelledOrder) {
+        throw new NotFoundException('Không tìm thấy đơn');
+      }
+      return cancelledOrder;
+    });
   }
 
   async update(id: number, updateOrderDto: UpdateOrderDto) {
