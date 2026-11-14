@@ -1,0 +1,81 @@
+FAIL test/voucher-loyalty.e2e-spec.ts
+  ● Test suite failed to run
+
+    Must use import to load ES Module: E:\SGU\SOFTWARE ENGINEERING 2026\bản sửa 3-11-26\BrewLite\apps\api\node_modules\@nestjs\testing\index.js
+
+    The file contains ESM syntax (import/export) that could not be executed as CommonJS. Either:
+      - Configure a transform (e.g. babel-jest) that compiles this file to CommonJS (see https://jestjs.io/docs/code-transformation)
+      - If the file is in "node_modules", allow it to be transformed by adjusting "transformIgnorePatterns" (see https://jestjs.io/docs/configuration#transformignorepatterns-arraystring)
+      - Use Node v24.9+ where Jest supports require(esm) natively (see https://jestjs.io/docs/ecmascript-modules#require-of-esm)
+
+    [0m[31m[1m>[22m[39m[90m 1 |[39m [36mimport[39m { [33mTest[39m[33m,[39m [33mTestingModule[39m } [36mfrom[39m [32m'@nestjs/testing'[39m[33m;[39m
+     [90m   |[39m [31m[1m^[22m[39m
+     [90m 2 |[39m [36mimport[39m { [33mINestApplication[39m[33m,[39m [33mValidationPipe[39m } [36mfrom[39m [32m'@nestjs/common'[39m[33m;[39m
+     [90m 3 |[39m [36mimport[39m request [36mfrom[39m [32m'supertest'[39m[33m;[39m
+     [90m 4 |[39m [36mimport[39m { [33mAppModule[39m } [36mfrom[39m [32m'../src/app.module'[39m[33m;[39m[0m
+
+      at createRequireEsmError (../node_modules/jest-runtime/build/index.js:452:17)
+      at Object.<anonymous> (voucher-loyalty.e2e-spec.ts:1:1)
+
+FAIL test/payment-idempotency.e2e-spec.ts
+  ● Test suite failed to run
+
+    Must use import to load ES Module: E:\SGU\SOFTWARE ENGINEERING 2026\bản sửa 3-11-26\BrewLite\apps\api\node_modules\@nestjs\testing\index.js
+
+    The file contains ESM syntax (import/export) that could not be executed as CommonJS. Either:
+      - Configure a transform (e.g. babel-jest) that compiles this file to CommonJS (see https://jestjs.io/docs/code-transformation)
+      - If the file is in "node_modules", allow it to be transformed by adjusting "transformIgnorePatterns" (see https://jestjs.io/docs/configuration#transformignorepatterns-arraystring)
+      - Use Node v24.9+ where Jest supports require(esm) natively (see https://jestjs.io/docs/ecmascript-modules#require-of-esm)
+
+    [0m[31m[1m>[22m[39m[90m 1 |[39m [36mimport[39m { [33mTest[39m[33m,[39m [33mTestingModule[39m } [36mfrom[39m [32m'@nestjs/testing'[39m[33m;[39m
+     [90m   |[39m [31m[1m^[22m[39m
+     [90m 2 |[39m [36mimport[39m { [33mINestApplication[39m[33m,[39m [33mValidationPipe[39m } [36mfrom[39m [32m'@nestjs/common'[39m[33m;[39m
+     [90m 3 |[39m [36mimport[39m request [36mfrom[39m [32m'supertest'[39m[33m;[39m
+     [90m 4 |[39m [36mimport[39m { [33mAppModule[39m } [36mfrom[39m [32m'../src/app.module'[39m[33m;[39m[0m
+
+      at createRequireEsmError (../node_modules/jest-runtime/build/index.js:452:17)
+      at Object.<anonymous> (payment-idempotency.e2e-spec.ts:1:1)
+
+FAIL test/order-concurrency.e2e-spec.ts
+  ● Test suite failed to run
+
+    Must use import to load ES Module: E:\SGU\SOFTWARE ENGINEERING 2026\bản sửa 3-11-26\BrewLite\apps\api\node_modules\@nestjs\testing\index.js
+
+    The file contains ESM syntax (import/export) that could not be executed as CommonJS. Either:
+      - Configure a transform (e.g. babel-jest) that compiles this file to CommonJS (see https://jestjs.io/docs/code-transformation)
+      - If the file is in "node_modules", allow it to be transformed by adjusting "transformIgnorePatterns" (see https://jestjs.io/docs/configuration#transformignorepatterns-arraystring)
+      - Use Node v24.9+ where Jest supports require(esm) natively (see https://jestjs.io/docs/ecmascript-modules#require-of-esm)
+
+    [0m[31m[1m>[22m[39m[90m 1 |[39m [36mimport[39m { [33mTest[39m[33m,[39m [33mTestingModule[39m } [36mfrom[39m [32m'@nestjs/testing'[39m[33m;[39m
+     [90m   |[39m [31m[1m^[22m[39m
+     [90m 2 |[39m [36mimport[39m { [33mINestApplication[39m[33m,[39m [33mValidationPipe[39m } [36mfrom[39m [32m'@nestjs/common'[39m[33m;[39m
+     [90m 3 |[39m [36mimport[39m request [36mfrom[39m [32m'supertest'[39m[33m;[39m
+     [90m 4 |[39m [36mimport[39m { [33mAppModule[39m } [36mfrom[39m [32m'../src/app.module'[39m[33m;[39m[0m
+
+      at createRequireEsmError (../node_modules/jest-runtime/build/index.js:452:17)
+      at Object.<anonymous> (order-concurrency.e2e-spec.ts:1:1)
+
+FAIL test/app.e2e-spec.ts
+  ● Test suite failed to run
+
+    Must use import to load ES Module: E:\SGU\SOFTWARE ENGINEERING 2026\bản sửa 3-11-26\BrewLite\apps\api\node_modules\@nestjs\testing\index.js
+
+    The file contains ESM syntax (import/export) that could not be executed as CommonJS. Either:
+      - Configure a transform (e.g. babel-jest) that compiles this file to CommonJS (see https://jestjs.io/docs/code-transformation)
+      - If the file is in "node_modules", allow it to be transformed by adjusting "transformIgnorePatterns" (see https://jestjs.io/docs/configuration#transformignorepatterns-arraystring)
+      - Use Node v24.9+ where Jest supports require(esm) natively (see https://jestjs.io/docs/ecmascript-modules#require-of-esm)
+
+    [0m[31m[1m>[22m[39m[90m 1 |[39m [36mimport[39m { [33mTest[39m[33m,[39m [33mTestingModule[39m } [36mfrom[39m [32m'@nestjs/testing'[39m[33m;[39m
+     [90m   |[39m [31m[1m^[22m[39m
+     [90m 2 |[39m [36mimport[39m { [33mINestApplication[39m } [36mfrom[39m [32m'@nestjs/common'[39m[33m;[39m
+     [90m 3 |[39m [36mimport[39m request [36mfrom[39m [32m'supertest'[39m[33m;[39m
+     [90m 4 |[39m [36mimport[39m { [33mApp[39m } [36mfrom[39m [32m'supertest/types'[39m[33m;[39m[0m
+
+      at createRequireEsmError (../node_modules/jest-runtime/build/index.js:452:17)
+      at Object.<anonymous> (app.e2e-spec.ts:1:1)
+
+Test Suites: 4 failed, 4 total
+Tests:       0 total
+Snapshots:   0 total
+Time:        9.46 s
+Ran all test suites.

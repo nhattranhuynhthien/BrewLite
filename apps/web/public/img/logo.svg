@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 56" role="img" aria-labelledby="title">
+  <title id="title">BrewLite</title>
+  <g fill="none" stroke="#8b5e3c" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">
+    <path d="M12 21h28v19a8 8 0 0 1-8 8H20a8 8 0 0 1-8-8z"/>
+    <path d="M40 26h5a6 6 0 0 1 0 12h-5M20 14c-3-3 2-5 0-8m10 8c-3-3 2-5 0-8"/>
+  </g>
+  <text x="58" y="39" fill="#3b2a20" font-family="Arial, sans-serif" font-size="28" font-weight="700">BrewLite</text>
+</svg>
