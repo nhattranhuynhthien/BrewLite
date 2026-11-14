@@ -1,4 +1,5 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import { IntIdPipe } from '../common/int-id.pipe';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ProductsService } from './products.service';
 
 @Controller('products')
@@ -11,7 +12,7 @@ export class ProductsController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
+  findOne(@Param('id', IntIdPipe) id: number) {
     return this.productsService.findOne(id);
   }
 }
