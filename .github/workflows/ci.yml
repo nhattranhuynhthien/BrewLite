@@ -10,6 +10,20 @@ jobs:
   build-backend:
     name: Build Backend (NestJS)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: brewlite_test
+          POSTGRES_PASSWORD: brewlite_test
+          POSTGRES_DB: brewlite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U brewlite_test -d brewlite_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://brewlite_test:brewlite_test@127.0.0.1:5432/brewlite_test?schema=public&connection_limit=5
     defaults:
       run:
         working-directory: ./apps/api
@@ -24,6 +38,14 @@ jobs:
         run: npm ci
       - name: Build Backend
         run: npm run build
+      - name: Lint Backend
+        run: npm run lint
+      - name: Unit tests
+        run: npm test -- --runInBand
+      - name: Apply test migrations
+        run: npm run test:e2e:migrate
+      - name: Integration tests
+        run: npm run test:e2e
 
   build-frontend:
     name: Build Frontend (Next.js)
@@ -42,3 +64,7 @@ jobs:
         run: npm ci
       - name: Build Frontend
         run: npm run build
+      - name: Lint Frontend
+        run: npm run lint
+      - name: Frontend regressions
+        run: npm test
