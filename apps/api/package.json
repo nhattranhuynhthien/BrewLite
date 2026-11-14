@@ -18,10 +18,9 @@
     "test:watch": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
     "test:cov": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "test:debug": "node --inspect-brk --experimental-vm-modules -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json",
+    "test:e2e": "node scripts/run-e2e.cjs",
     "postinstall": "prisma skills sync || exit 0",
-    "test:e2e:migrate": "node --env-file=.env.test ./node_modules/prisma/build/index.js migrate deploy",
-    "test:e2e": "node --env-file=.env.test --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --runInBand --json --outputFile=test-results/e2e-results.json"
+    "test:e2e:migrate": "node scripts/run-e2e.cjs --migrate"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

@@ -9,17 +9,45 @@ import { UpdateOrderDto } from './dto/update-order.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertTransition, OrderStatus } from './order-status';
 import { Prisma } from '@prisma/client';
+import { createHash } from 'node:crypto';
+
+class StockConflict extends ConflictException {}
 
 @Injectable()
 export class OrdersService {
   constructor(private prisma: PrismaService) {}
 
-  async create(userId: number, createOrderDto: CreateOrderDto) {
+  async create(userId: number, createOrderDto: CreateOrderDto, idempotencyKey?: string, stockRetries = 10): Promise<{ message: string; orderId: number; order: Prisma.OrderGetPayload<{ include: { items: true } }> }> {
+    if (idempotencyKey !== undefined && (!idempotencyKey.trim() || idempotencyKey.length > 200)) {
+      throw new BadRequestException('Idempotency-Key phải có từ 1 đến 200 ký tự.');
+    }
+    const requestKey = idempotencyKey
+      ? createHash('sha256').update(`${userId}:${idempotencyKey}`).digest('hex')
+      : null;
+    const requestHash = createHash('sha256').update(JSON.stringify({
+      items: createOrderDto.items?.map(item => ({
+        productId: item.productId, quantity: item.quantity, size: item.size ?? null,
+        sweetness: item.sweetness ?? null, ice: item.ice ?? null, note: item.note ?? null,
+        toppingIds: [...(item.toppingIds ?? [])].sort((a, b) => a - b),
+      })),
+      voucherCode: createOrderDto.voucherCode ?? '', pointsToUse: createOrderDto.pointsToUse ?? 0,
+    })).digest('hex');
     if (!createOrderDto.items || createOrderDto.items.length === 0) {
       throw new BadRequestException('Đơn hàng phải chứa ít nhất một sản phẩm.');
     }
 
     return await this.prisma.$transaction(async (tx) => {
+      if (requestKey) {
+        // Serialize requests with the same key across API processes; rollback releases the lock.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${requestKey}, 0))`;
+        const existing = await tx.order.findUnique({ where: { requestKey }, include: { items: true } });
+        if (existing) {
+          if (existing.requestHash !== requestHash) {
+            throw new ConflictException('Idempotency-Key đã được dùng cho giỏ hàng khác.');
+          }
+          return { message: 'Đơn hàng đã được tạo', orderId: existing.id, order: existing };
+        }
+      }
       let calculatedTotal = 0;
       const orderItemsData: Prisma.OrderItemCreateWithoutOrderInput[] = [];
 
@@ -51,14 +79,16 @@ export class OrdersService {
           where: {
             id: Number(item.productId),
             stock: { gte: item.quantity },
+            version: product.version,
           },
           data: {
             stock: { decrement: item.quantity },
+            version: { increment: 1 },
           },
         });
 
         if (updateResult.count === 0) {
-          throw new ConflictException(
+          throw new StockConflict(
             `Xung đột tồn kho cho sản phẩm "${product.name}" do có nhiều người cùng mua. Vui lòng thử lại!`,
           );
         }
@@ -161,6 +191,8 @@ export class OrdersService {
       // 6. Tạo đơn hàng với các Option đã chốt giá
       const newOrder = await tx.order.create({
         data: {
+          requestKey,
+          requestHash: requestKey ? requestHash : null,
           pointsUsed: pointsToUse,
           promotionId: promoToUpdate,
           userId: userId,
@@ -180,6 +212,11 @@ export class OrdersService {
         orderId: newOrder.id,
         order: newOrder,
       };
+    }).catch((error: unknown) => {
+      if (error instanceof StockConflict && stockRetries > 0) {
+        return this.create(userId, createOrderDto, idempotencyKey, stockRetries - 1);
+      }
+      throw error;
     });
   }
 
