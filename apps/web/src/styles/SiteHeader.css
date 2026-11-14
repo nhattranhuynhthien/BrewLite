@@ -23,10 +23,55 @@
 .site-header__icon, .site-header__cart { position: relative; width: 34px; height: 36px; display: inline-grid; place-items: center; padding: 0; border: 0; background: none; color: #263a30; cursor: pointer; }
 .site-header__cart span { position: absolute; top: 0; right: -2px; min-width: 16px; height: 16px; display: grid; place-items: center; padding: 0 3px; border-radius: 50%; background: #1c6b3a; color: #fff; font-size: 9px; }
 .site-header__account-wrap { position: relative; display: flex; }
+.site-header__points {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f0f7f2;
+  border: 1px solid #c9e4d1;
+  color: #176033;
+  font-size: 12px;
+  font-weight: 600;
+}
 .site-header__account { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: #073f35; color: #fff; cursor: pointer; transition: background-color 150ms ease, box-shadow 150ms ease; }
 .site-header__account.is-authenticated { background: #16803f; }
 .site-header__account:hover, .site-header__account[aria-expanded="true"] { box-shadow: 0 0 0 3px #1c6b3a24; }
-.site-header__account-menu { position: absolute; top: calc(100% + 12px); right: 0; z-index: 60; width: 190px; overflow: hidden; padding: 5px 0; border: 1px solid #e2e9e2; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px #17231a1f; }
+.site-header__account-menu { position: absolute; top: calc(100% + 12px); right: 0; z-index: 60; width: 220px; overflow: hidden; padding: 5px 0; border: 1px solid #e2e9e2; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px #17231a1f; }
+.site-header__account-profile {
+  padding: 10px 14px 10px;
+  border-bottom: 1px solid #edf1ed;
+  background: #fbfdfb;
+}
+.site-header__account-profile strong {
+  display: block;
+  font-size: 13px;
+  color: #17231a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.site-header__account-email {
+  display: block;
+  font-size: 11px;
+  color: #6d7d71;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+.site-header__account-points {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #e8f5ec;
+  color: #1b6c3a;
+  font-size: 11px;
+}
 .site-header__account-menu::before { position: absolute; top: -6px; right: 10px; width: 11px; height: 11px; border-top: 1px solid #e2e9e2; border-left: 1px solid #e2e9e2; background: #fff; content: ""; transform: rotate(45deg); }
 .site-header__account-menu-item { position: relative; width: 100%; min-height: 42px; display: flex; align-items: center; gap: 11px; padding: 0 13px; border: 0; background: #fff; color: #294239; font: inherit; font-size: 12px; text-align: left; text-decoration: none; cursor: pointer; }
 .site-header__account-menu-item + .site-header__account-menu-item { border-top: 1px solid #edf1ed; }
