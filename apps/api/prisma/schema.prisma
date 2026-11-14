@@ -20,6 +20,7 @@ model User {
 }
 
 model Product {
+  version     Int         @default(0)
   id          Int         @id @default(autoincrement())
   name        String
   description String?
@@ -39,10 +40,17 @@ model Promotion {
   discountPct Int // Phần trăm giảm giá (ví dụ: 10)
   maxDiscount Int // Số tiền giảm tối đa
   usageLimit  Int // Số lượt dùng còn lại
+  orders      Order[]
 }
 
 model Order {
+  paymentAttemptKey String?
+  pointsUsed Int @default(0)
+  promotionId Int?
+  promotion Promotion? @relation(fields: [promotionId], references: [id], onDelete: Restrict)
   id        Int         @id @default(autoincrement())
+  requestKey String?    @unique
+  requestHash String?
   userId    Int
   user      User        @relation(fields: [userId], references: [id])
   items     OrderItem[]

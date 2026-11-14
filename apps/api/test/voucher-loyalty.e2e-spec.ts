@@ -3,18 +3,21 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'node:crypto';
+import { assertTestDatabase, signTestToken } from './test-utils';
  
 describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  let jwtService: JwtService;
+  const prefix = `test-loyalty-${randomUUID()}`;
+  const voucherCode = `${prefix}-voucher`;
   let testUserId: number;
   let testProductId: number;
   let testToppingId: number;
   let authToken: string;
  
   beforeAll(async () => {
+    assertTestDatabase();
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -24,31 +27,19 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
     await app.init();
  
     prisma = app.get<PrismaService>(PrismaService);
-    jwtService = app.get<JwtService>(JwtService);
  
     // Chuẩn bị User test có sẵn 10 điểm thưởng
-    let user = await prisma.user.findFirst({ where: { email: 'test_voucher_loyalty@brewlite.vn' } });
-    if (!user) {
-      user = await prisma.user.create({
+    const user = await prisma.user.create({
         data: {
-          email: 'test_voucher_loyalty@brewlite.vn',
+          email: `${prefix}@test.local`,
           name: 'Test Voucher Loyalty User',
           password: 'hashed_password_123',
           rewardPoints: 10, // 10 điểm thưởng
         },
       });
-    } else {
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: { rewardPoints: 10 },
-      });
-    }
     testUserId = user.id;
  
-    authToken = await jwtService.signAsync(
-      { sub: testUserId, email: user.email },
-      { secret: process.env.JWT_SECRET || 'brewlite_super_secret_jwt_key_2026' },
-    );
+    authToken = await signTestToken(app, user);
  
     // Chuẩn bị sản phẩm test (giá 100.000 VNĐ, tồn kho 50)
     const product = await prisma.product.create({
@@ -74,10 +65,10 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
  
     // Chuẩn bị Voucher giảm giá: giảm 20%, tối đa 30.000đ, 2 lượt dùng
     await prisma.promotion.upsert({
-      where: { code: 'TESTGIAM20' },
+      where: { code: voucherCode },
       update: { discountPct: 20, maxDiscount: 30000, usageLimit: 2 },
       create: {
-        code: 'TESTGIAM20',
+        code: voucherCode,
         discountPct: 20,
         maxDiscount: 30000,
         usageLimit: 2,
@@ -86,6 +77,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
   });
  
   afterAll(async () => {
+    if (!prisma) { await app?.close(); return; }
     if (testProductId) {
       await prisma.orderItem.deleteMany({ where: { productId: testProductId } });
       await prisma.product.deleteMany({ where: { id: testProductId } });
@@ -102,8 +94,8 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
       await prisma.order.deleteMany({ where: { userId: testUserId } });
       await prisma.user.deleteMany({ where: { id: testUserId } });
     }
-    await prisma.promotion.deleteMany({ where: { code: 'TESTGIAM20' } });
-    await prisma.procPaymentKey.deleteMany({ where: { key: { startsWith: 'test-loyalty-' } } });
+    await prisma.promotion.deleteMany({ where: { code: voucherCode } });
+    await prisma.procPaymentKey.deleteMany({ where: { key: { startsWith: prefix } } });
     await app.close();
   });
  
@@ -114,14 +106,14 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
       .set('Authorization', `Bearer ${authToken}`)
       .send({
         items: [{ productId: testProductId, quantity: 1 }],
-        voucherCode: 'TESTGIAM20',
+        voucherCode: voucherCode,
       });
  
     expect([200, 201]).toContain(response.status);
     expect(response.body.order.total).toBe(80000);
  
     // Kiểm tra Voucher bị giảm usageLimit từ 2 xuống 1
-    const promo = await prisma.promotion.findUnique({ where: { code: 'TESTGIAM20' } });
+    const promo = await prisma.promotion.findUnique({ where: { code: voucherCode } });
     expect(promo?.usageLimit).toBe(1);
   });
  
@@ -176,7 +168,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
       });
  
     const orderId = cleanOrderRes.body.orderId;
-    const paymentKey = `test-loyalty-${Date.now()}`;
+    const paymentKey = `${prefix}-${randomUUID()}`;
  
     // Thanh toán đơn 100.000đ -> Kỳ vọng tích 10 điểm
     const payRes = await request(app.getHttpServer())
@@ -237,7 +229,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
  
   it('7. Chỉ một request đồng thời dùng được lượt voucher cuối cùng', async () => {
     await prisma.promotion.update({
-      where: { code: 'TESTGIAM20' },
+      where: { code: voucherCode },
       data: { usageLimit: 1 },
     });
     const ordersBefore = await prisma.order.count({ where: { userId: testUserId } });
@@ -247,17 +239,17 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
       request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${authToken}`)
-        .send({ items: [{ productId: testProductId, quantity: 1 }], voucherCode: 'TESTGIAM20' }),
+        .send({ items: [{ productId: testProductId, quantity: 1 }], voucherCode: voucherCode }),
       request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${authToken}`)
-        .send({ items: [{ productId: testProductId, quantity: 1 }], voucherCode: 'TESTGIAM20' }),
+        .send({ items: [{ productId: testProductId, quantity: 1 }], voucherCode: voucherCode }),
     ]);
  
     expect(responses.filter((response) => [200, 201].includes(response.status))).toHaveLength(1);
     expect(responses.filter((response) => [400, 409].includes(response.status))).toHaveLength(1);
     expect(responses.every((response) => [200, 201, 400, 409].includes(response.status))).toBe(true);
-    expect((await prisma.promotion.findUnique({ where: { code: 'TESTGIAM20' } }))?.usageLimit).toBe(0);
+    expect((await prisma.promotion.findUnique({ where: { code: voucherCode } }))?.usageLimit).toBe(0);
     expect(await prisma.order.count({ where: { userId: testUserId } })).toBe(ordersBefore + 1);
     expect((await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock).toBe(stockBefore - 1);
   });

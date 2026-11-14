@@ -111,7 +111,7 @@ export class OrdersService {
         });
 
         if (promo && promo.usageLimit > 0) {
-          const discountAmount = Math.min((calculatedTotal * promo.discountPct) / 100, promo.maxDiscount);
+          const discountAmount = Math.round(Math.min((calculatedTotal * promo.discountPct) / 100, promo.maxDiscount));
           calculatedTotal -= discountAmount;
           promoToUpdate = promo.id;
         } else {
@@ -120,16 +120,17 @@ export class OrdersService {
       }
 
       // 3. Kiểm tra logic dùng điểm thưởng
-      if (createOrderDto.pointsToUse) {
+      const pointsToUse = Math.min(createOrderDto.pointsToUse ?? 0, Math.floor(calculatedTotal / 1000));
+      if (pointsToUse) {
         const user = await tx.user.findUnique({
           where: { id: userId },
         });
 
-        if (!user || user.rewardPoints < createOrderDto.pointsToUse) {
+        if (!user || user.rewardPoints < pointsToUse) {
           throw new BadRequestException('Tài khoản không đủ điểm thưởng để áp dụng');
         }
 
-        const pointDiscount = createOrderDto.pointsToUse * 1000;
+        const pointDiscount = pointsToUse * 1000;
         calculatedTotal -= pointDiscount;
       }
 
@@ -147,10 +148,10 @@ export class OrdersService {
       }
 
       // 5. Trừ điểm của người dùng
-      if (createOrderDto.pointsToUse) {
+      if (pointsToUse) {
         const pointsUpdate = await tx.user.updateMany({
-          where: { id: userId, rewardPoints: { gte: createOrderDto.pointsToUse } },
-          data: { rewardPoints: { decrement: createOrderDto.pointsToUse } },
+          where: { id: userId, rewardPoints: { gte: pointsToUse } },
+          data: { rewardPoints: { decrement: pointsToUse } },
         });
         if (pointsUpdate.count !== 1) {
           throw new ConflictException('Số dư điểm thưởng vừa thay đổi. Vui lòng thử lại!');
@@ -160,6 +161,8 @@ export class OrdersService {
       // 6. Tạo đơn hàng với các Option đã chốt giá
       const newOrder = await tx.order.create({
         data: {
+          pointsUsed: pointsToUse,
+          promotionId: promoToUpdate,
           userId: userId,
           total: calculatedTotal,
           status: 'PENDING',

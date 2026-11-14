@@ -1,4 +1,4 @@
-import { ArrayUnique, IsNotEmpty, IsArray, ValidateNested, Min, IsOptional, IsString, IsInt, IsIn, MaxLength } from 'class-validator';
+import { Max, ArrayUnique, IsNotEmpty, IsArray, ValidateNested, Min, IsOptional, IsString, IsInt, IsIn, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -7,6 +7,7 @@ export class OrderItemDto {
   @IsNotEmpty({ message: 'Product ID không được để trống' })
   @IsInt({ message: 'Product ID phải là số nguyên' })
   @Min(1)
+  @Max(2147483647)
   productId: number;
 
   @ApiProperty({ description: 'Số lượng đặt mua', example: 2 })
@@ -40,6 +41,7 @@ export class OrderItemDto {
   @ArrayUnique({ message: 'Danh sách topping không được chứa ID trùng lặp' })
   @IsInt({ each: true, message: 'ID topping phải là số nguyên' })
   @Min(1, { each: true, message: 'ID topping phải lớn hơn 0' })
+  @Max(2147483647, { each: true })
   toppingIds?: number[];
 
   @ApiPropertyOptional({ description: 'Ghi chú riêng cho món', example: 'Ít đá, nhiều đường' })
