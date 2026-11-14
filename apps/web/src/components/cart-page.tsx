@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeft, ClipboardCheck, MapPin, Minus, Plus, ShieldCheck, ShoppingCart, Trash2 } from 'lucide-react';
+import { ArrowLeft, Award, ClipboardCheck, MapPin, Minus, Plus, ShieldCheck, ShoppingCart, Tag, Trash2 } from 'lucide-react';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useCartPage } from '@/hooks/useCartPage';
 import {
@@ -31,8 +31,8 @@ export default function CartPage() {
         navItems={[
           { label: 'Trang chủ', href: '/' },
           { label: 'Menu', href: '/menu' },
-          { label: 'Khuyến mãi', href: '/menu#menu-promo' },
-          { label: 'Giới thiệu', href: '/menu#menu-intro' },
+          { label: 'Khuyến mãi', href: '/#promotions' },
+          { label: 'Giới thiệu', href: '/#about' },
         ]}
         onSearchChange={() => {}}
         cartHref="/cart"
@@ -131,6 +131,14 @@ export default function CartPage() {
                   <div><dt>Tạm tính ({totalQuantity} món)</dt><dd>{formatPrice(subtotal)}</dd></div>
                   <div><dt>Giảm giá</dt><dd>{formatPrice(0)}</dd></div>
                 </dl>
+                <div className="cart-promo-hint">
+                  <Tag aria-hidden="true" size={13} />
+                  <span>Dùng mã <strong>GIAM10</strong> ở bước thanh toán để giảm 10%!</span>
+                </div>
+                <div className="cart-points-hint">
+                  <Award aria-hidden="true" size={13} />
+                  <span>Tích lũy <strong>+{Math.floor(subtotal / 10000)} điểm</strong> khi hoàn thành đơn</span>
+                </div>
                 <div className="cart-summary__total"><strong>Tổng cộng</strong><strong>{formatPrice(total)}</strong></div>
                 <div className="cart-delivery-note">
                   <MapPin aria-hidden="true" size={18} />

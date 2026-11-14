@@ -2,10 +2,24 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import Image from 'next/image';
-import { CalendarDays, ChevronDown, ClipboardList, CreditCard, MapPin, Search, WalletCards } from 'lucide-react';
-import { ApiError, apiFetch, getAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
+import {
+  Award,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  ClipboardList,
+  Coffee,
+  CreditCard,
+  Gift,
+  MapPin,
+  Search,
+  Tag,
+  WalletCards,
+} from 'lucide-react';
+import { ApiError, apiFetch, getAccessToken, getUserIdFromAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 import SiteHeader from '@/layouts/SiteHeader';
 import ProductDetailModal from '@/components/ProductDetailModal';
+import { useUserProfile, notifyProfileUpdate } from '@/hooks/useUserProfile';
 import { PRODUCTS as MENU_PRODUCTS } from '@/lib/menu-data';
 import {
   getCartItemKey,
@@ -14,10 +28,12 @@ import {
 } from '@/lib/product-options';
 import { useCartStore } from '@/store/cart-store';
 import { useToppings } from '@/hooks/useToppings';
+import { checkoutStorageKey, loadCheckoutAttempt, saveCheckoutAttempt, getActiveCheckout, saveActiveCheckout, finishCheckout, withCheckoutLock } from '@/lib/checkout-attempt';
+import { matchesOrderCode, orderCode, paymentLabel, primaryPayment, successfulSpend, type HistoryPayment } from '@/lib/order-history';
 import type { Product } from '@/types/product';
 
 type View = 'menu' | 'checkout' | 'confirmation' | 'orders';
-type PaymentMethod = 'WALLET' | 'CARD';
+type PaymentMethod = 'WALLET' | 'CREDIT_CARD';
 type Order = {
   id: number | string;
   total: number;
@@ -34,7 +50,7 @@ type Order = {
     note: string | null;
     product?: Pick<Product, 'name' | 'imageUrl'> | null;
   }[];
-  payment?: { method: string; status: string }[];
+  payment?: HistoryPayment[];
 };
 
 const currency = (amount: number) =>
@@ -53,6 +69,54 @@ function Status({ value }: { value: string }) {
   return <span className={`status-pill status-${value.toLowerCase()}`}>{statuses[value] ?? value}</span>;
 }
 
+const ORDER_STEPS = [
+  { key: 'PENDING', label: 'Đặt đơn' },
+  { key: 'PAID', label: 'Đã thanh toán' },
+  { key: 'PREPARING', label: 'Đang pha chế' },
+  { key: 'READY', label: 'Sẵn sàng lấy' },
+  { key: 'COMPLETED', label: 'Hoàn tất' },
+];
+
+function OrderStateStepper({ status }: { status: string }) {
+  if (status === 'CANCELLED') {
+    return (
+      <div className="order-stepper is-cancelled">
+        <span className="order-stepper__badge">✕ Đơn hàng đã bị hủy</span>
+      </div>
+    );
+  }
+  if (status === 'PAYMENT_FAILED') {
+    return (
+      <div className="order-stepper is-failed">
+        <span className="order-stepper__badge">⚠ Thanh toán thất bại · Chờ thử lại</span>
+      </div>
+    );
+  }
+
+  const currentIdx = ORDER_STEPS.findIndex((s) => s.key === status);
+  const activeIdx = currentIdx === -1 ? (status === 'PAID' ? 1 : 0) : currentIdx;
+
+  return (
+    <div className="order-stepper" aria-label="Tiến trình đơn hàng">
+      {ORDER_STEPS.map((step, idx) => {
+        const isCompleted = idx < activeIdx;
+        const isCurrent = idx === activeIdx;
+        return (
+          <div
+            key={step.key}
+            className={`order-stepper__step ${isCompleted ? 'is-completed' : ''} ${isCurrent ? 'is-current' : ''}`}
+          >
+            <div className="order-stepper__circle">
+              {isCompleted ? '✓' : idx + 1}
+            </div>
+            <span className="order-stepper__label">{step.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function formatOrderDate(value?: string) {
   if (!value) return 'Thời gian không khả dụng';
   const date = new Date(value);
@@ -69,7 +133,7 @@ export default function Storefront({
 }) {
   const items = useCartStore((state) => state.items);
   const addItem = useCartStore((state) => state.addItem);
-  const clearCart = useCartStore((state) => state.clearCart);
+  const consumeItems = useCartStore((state) => state.consumeItems);
   const token = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -96,9 +160,39 @@ export default function Storefront({
   const [historyRequest, setHistoryRequest] = useState(0);
   const [historySearch, setHistorySearch] = useState('');
   const [expandedOrders, setExpandedOrders] = useState<Set<string> | null>(null);
-  const [receipt, setReceipt] = useState<{ id: number | string; status: string } | null>(null);
-  const idempotencyKey = useRef<string | null>(null);
-  const pendingOrderId = useRef<number | string | null>(null);
+  const { rewardPoints, refetch: refetchProfile } = useUserProfile();
+  const [voucherInput, setVoucherInput] = useState('');
+  const [appliedVoucher, setAppliedVoucher] = useState<string | null>(null);
+  const [voucherError, setVoucherError] = useState('');
+  const [usePoints, setUsePoints] = useState(false);
+  const [pointsToUse, setPointsToUse] = useState(0);
+  const [receipt, setReceipt] = useState<{ id: number | string; total?: number; status: string } | null>(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState<number | string | null>(null);
+  const [cancelMessage, setCancelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const checkoutInFlight = useRef(false);
+
+  async function cancelOrder(orderId: number | string) {
+    if (!window.confirm(`Bạn có chắc chắn muốn hủy đơn hàng #${orderId} không?`)) return;
+    setCancellingOrderId(orderId);
+    setCancelMessage(null);
+    try {
+      await apiFetch(`/orders/${orderId}/cancel`, { method: 'PATCH' });
+      setCancelMessage({ type: 'success', text: `Đã hủy thành công đơn hàng #${orderId}.` });
+      setHistoryRequest((r) => r + 1);
+      notifyProfileUpdate();
+      void refetchProfile();
+      if (receipt && String(receipt.id) === String(orderId)) {
+        setReceipt((prev) => prev ? { ...prev, status: 'CANCELLED' } : null);
+      }
+    } catch (err) {
+      setCancelMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Không thể hủy đơn hàng này.',
+      });
+    } finally {
+      setCancellingOrderId(null);
+    }
+  }
 
   useEffect(() => {
     if (initialView !== 'checkout' || window.location.search === '') return;
@@ -143,14 +237,52 @@ export default function Storefront({
       ? featuredProducts.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
       : featuredProducts;
   }, [products, searchQuery]);
-  const total = useMemo(
+  const subtotal = useMemo(
     () => items.reduce((sum, item) => sum + getConfiguredUnitPrice(item.product, item.options) * item.quantity, 0),
     [items],
   );
+  const voucherDiscount = useMemo(() => {
+    if (!appliedVoucher) return 0;
+    if (appliedVoucher.toUpperCase() === 'GIAM10') {
+      return Math.min(Math.round(subtotal * 0.1), 50000);
+    }
+    return 0;
+  }, [appliedVoucher, subtotal]);
+
+  const totalAfterVoucher = Math.max(0, subtotal - voucherDiscount);
+  const maxUsablePoints = Math.min(rewardPoints, Math.floor(totalAfterVoucher / 1000));
+  const actualPointsToUse = usePoints ? Math.min(pointsToUse, maxUsablePoints) : 0;
+  const pointsDiscount = actualPointsToUse * 1000;
+  const total = Math.max(0, totalAfterVoucher - pointsDiscount);
+  const earnedPoints = Math.floor(total / 10000);
+
+  function applyVoucher(code?: string) {
+    const target = (code ?? voucherInput).trim().toUpperCase();
+    if (!target) {
+      setVoucherError('Vui lòng nhập mã ưu đãi');
+      return;
+    }
+    setAppliedVoucher(target);
+    setVoucherInput(target);
+    setVoucherError('');
+  }
+
+  function removeVoucher() {
+    setAppliedVoucher(null);
+    setVoucherInput('');
+    setVoucherError('');
+  }
+
+  function handleTogglePoints(checked: boolean) {
+    setUsePoints(checked);
+    if (checked && pointsToUse === 0) {
+      setPointsToUse(maxUsablePoints);
+    }
+  }
   const filteredHistory = useMemo(() => {
     const query = historySearch.trim().toLocaleLowerCase('vi');
     return history.filter((order) => {
-      const matchesSearch = !query || String(order.id).toLocaleLowerCase('vi').includes(query);
+      const matchesSearch = matchesOrderCode(order.id, query);
       return matchesSearch;
     });
   }, [history, historySearch]);
@@ -215,6 +347,7 @@ export default function Storefront({
   }
 
   async function pay() {
+    if (checkoutInFlight.current) return;
     if (!token) {
       setCheckoutError('Vui lòng đăng nhập trước khi thanh toán.');
       setAuthMode('login');
@@ -226,67 +359,136 @@ export default function Storefront({
       return;
     }
 
+    checkoutInFlight.current = true;
     setCheckoutBusy(true);
     setCheckoutError('');
-    idempotencyKey.current ??= crypto.randomUUID();
-    const key = idempotencyKey.current;
     try {
-      if (pendingOrderId.current === null) {
-        const created = await apiFetch<{
-          id?: number | string;
-          orderId?: number | string;
-          order?: { id: number | string };
-        }>('/orders', {
-          method: 'POST',
-          headers: { 'Idempotency-Key': key },
-          body: JSON.stringify({
-            items: items.map(({ product, quantity, options }) => {
-              const normalized = normalizeProductOptions(options);
-              return {
-                productId: product.id,
-                quantity,
-                size: normalized.size,
-                toppingIds: normalized.toppings.map(({ id }) => id),
-                sweetness: normalized.sweetness,
-                ice: normalized.ice,
-                note: normalized.note,
-              };
-            }),
+      await withCheckoutLock(token, async () => {
+        const authorization = { Authorization: `Bearer ${token}` };
+        const orderPayload: {
+          items: Array<{
+            productId: number;
+            quantity: number;
+            size: 'S' | 'M' | 'L';
+            toppingIds: number[];
+            sweetness: string;
+            ice: string;
+            note: string;
+          }>;
+          voucherCode?: string;
+          pointsToUse?: number;
+        } = {
+          items: items.map(({ product, quantity, options }) => {
+            const normalized = normalizeProductOptions(options);
+            return {
+              productId: product.id, quantity, size: normalized.size,
+              toppingIds: normalized.toppings.map(({ id }) => id),
+              sweetness: normalized.sweetness, ice: normalized.ice, note: normalized.note,
+            };
           }),
-        });
-        const createdOrderId = created.orderId ?? created.order?.id ?? created.id;
-        if (createdOrderId === undefined || createdOrderId === null) {
-          throw new Error('API tạo đơn không trả về mã đơn hàng.');
+        };
+        if (appliedVoucher) {
+          orderPayload.voucherCode = appliedVoucher;
         }
-        pendingOrderId.current = createdOrderId;
-      }
-      const orderId = pendingOrderId.current;
-
-      const payment = await apiFetch<{
-        status?: string;
-        message?: string;
-        orderStatus?: string;
-        payment?: { status?: string };
-        order?: { status?: string };
-      }>('/payments', {
-        method: 'POST',
-        headers: { 'Idempotency-Key': key },
-        body: JSON.stringify({ orderId, method }),
+        if (usePoints && actualPointsToUse > 0) {
+          orderPayload.pointsToUse = actualPointsToUse;
+        }
+        const body = JSON.stringify(orderPayload);
+        const storageKey = await checkoutStorageKey(token, body);
+        const active = getActiveCheckout(token);
+        if (active && active.storageKey !== storageKey) {
+          // Recover a lost order response with the original key before inspecting its state.
+          const previous = loadCheckoutAttempt(active.storageKey);
+          let recovered: { orderId: number };
+          try {
+            recovered = await apiFetch('/orders', {
+              method: 'POST', headers: { ...authorization, 'Idempotency-Key': previous.orderKey }, body: active.body,
+            });
+          } catch (error) {
+            if (error instanceof ApiError && [400, 404].includes(error.status)) finishCheckout(token, active.storageKey);
+            throw error;
+          }
+          const oldOrder = await apiFetch<Order>(`/orders/${recovered.orderId}`, { headers: authorization });
+          if (oldOrder.status !== 'CANCELLED') {
+            if (['PAID', 'PREPARING', 'READY', 'COMPLETED'].includes(oldOrder.status)) {
+              finishCheckout(token, active.storageKey);
+              throw new Error(`Đơn ${orderCode(oldOrder.id)} đã thanh toán. Giỏ hiện tại được giữ nguyên; hãy kiểm tra lịch sử trước khi thanh toán giỏ này.`);
+            }
+            throw new Error(`Đơn ${orderCode(oldOrder.id)} chưa hoàn tất. Vui lòng kiểm tra hoặc hủy đơn trong lịch sử trước khi thanh toán giỏ đã thay đổi.`);
+          }
+          finishCheckout(token, active.storageKey);
+        }
+        const attempt = loadCheckoutAttempt(storageKey);
+        if (attempt.paymentMethod && attempt.paymentMethod !== method) {
+          throw new Error('Lần thanh toán trước chưa rõ kết quả. Vui lòng chọn lại phương thức trước đó để kiểm tra, hoặc xem lịch sử đơn.');
+        }
+        saveActiveCheckout(token, { storageKey, body });
+        let created: { orderId: number; order: { total: number } };
+        try {
+          created = await apiFetch('/orders', {
+            method: 'POST', headers: { ...authorization, 'Idempotency-Key': attempt.orderKey }, body,
+          });
+        } catch (error) {
+          if (error instanceof ApiError && [400, 404].includes(error.status)) finishCheckout(token, storageKey);
+          throw error;
+        }
+        const orderId = created.orderId;
+        const amount = created.order?.total;
+        if (!Number.isInteger(orderId) || !Number.isFinite(amount) || amount < 0) {
+          throw new Error('API tạo đơn không trả về mã đơn hoặc tổng tiền hợp lệ.');
+        }
+        saveActiveCheckout(token, { storageKey, body, orderId });
+        const currentOrder = await apiFetch<Order>(`/orders/${orderId}`, { headers: authorization });
+        if (currentOrder.status === 'CANCELLED') {
+          finishCheckout(token, storageKey);
+          throw new Error('Đơn trước đã hủy. Vui lòng bấm thanh toán lại để tạo đơn mới.');
+        }
+        attempt.paymentMethod = method;
+        saveCheckoutAttempt(storageKey, attempt);
+        const payment = await apiFetch<{
+          status?: string;
+          message?: string;
+          orderStatus?: string;
+          payment?: { status?: string };
+          order?: { status?: string };
+        }>('/payments', {
+          method: 'POST',
+          headers: { ...authorization, 'Idempotency-Key': attempt.paymentKey },
+          body: JSON.stringify({ orderId, method, amount }),
+        });
+        const paymentStatus = payment?.orderStatus ?? payment?.payment?.status ?? payment?.status ?? payment?.order?.status;
+        if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
+        if (paymentStatus === 'PAYMENT_FAILED' || paymentStatus === 'FAILED') {
+          attempt.paymentKey = crypto.randomUUID();
+          delete attempt.paymentMethod;
+          saveCheckoutAttempt(storageKey, attempt);
+          throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
+        }
+        if (paymentStatus !== 'PAID' && paymentStatus !== 'SUCCESS') {
+          throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${paymentStatus}).`);
+        }
+        if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
+          throw new Error('Tài khoản đã thay đổi. Đơn đã thanh toán thuộc tài khoản trước; giỏ hiện tại được giữ nguyên.');
+        }
+        await useCartStore.persist.rehydrate();
+        if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
+          throw new Error('Tài khoản đã thay đổi. Vui lòng kiểm tra đơn với tài khoản đã thanh toán.');
+        }
+        setReceipt({
+          id: orderId,
+          total: amount,
+          status: payment.order?.status ?? payment.orderStatus ?? paymentStatus ?? 'PAID',
+        });
+        consumeItems(items);
+        setAppliedVoucher(null);
+        setVoucherInput('');
+        setUsePoints(false);
+        setPointsToUse(0);
+        notifyProfileUpdate();
+        void refetchProfile();
+        finishCheckout(token, storageKey);
+        setView('confirmation');
       });
-      const paymentStatus = payment?.orderStatus ?? payment?.payment?.status ?? payment?.status ?? payment?.order?.status;
-      if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
-      if (paymentStatus === 'PAYMENT_FAILED' || paymentStatus === 'FAILED') {
-        idempotencyKey.current = crypto.randomUUID();
-        throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
-      }
-      if (paymentStatus !== 'PAID' && paymentStatus !== 'SUCCESS') {
-        throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${paymentStatus}).`);
-      }
-      setReceipt({ id: orderId, status: payment.order?.status ?? payment.orderStatus ?? paymentStatus ?? 'PAID' });
-      clearCart();
-      idempotencyKey.current = null;
-      pendingOrderId.current = null;
-      setView('confirmation');
     } catch (error) {
       setCheckoutError(error instanceof Error ? error.message : 'Không thể hoàn tất thanh toán.');
       if (error instanceof ApiError && error.status === 401) {
@@ -294,6 +496,7 @@ export default function Storefront({
         setAuthOpen(true);
       }
     } finally {
+      checkoutInFlight.current = false;
       setCheckoutBusy(false);
     }
   }
@@ -383,19 +586,186 @@ export default function Storefront({
             </div>
           </div>
         </section>
+
+        {items.length > 0 && (
+          <aside className="menu-floating-cart" aria-label="Xem giỏ hàng nhanh">
+            <div className="menu-floating-cart__content">
+              <div className="menu-floating-cart__left">
+                <span className="menu-floating-cart__badge">{items.reduce((s, i) => s + i.quantity, 0)}</span>
+                <div>
+                  <strong>{currency(subtotal)}</strong>
+                  <small>{items.reduce((s, i) => s + i.quantity, 0)} món trong giỏ</small>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="button button-primary menu-floating-cart__action"
+                onClick={() => setView('checkout')}
+              >
+                Xem giỏ hàng ({items.reduce((s, i) => s + i.quantity, 0)}) →
+              </button>
+            </div>
+          </aside>
+        )}
       </>}
 
       {view === 'checkout' && <section className="page-section checkout-section">
         <button className="back-link" onClick={() => setView('menu')} type="button">← Quay lại thực đơn</button>
         <div className="checkout-header"><span className="eyebrow">BƯỚC CUỐI CÙNG</span><h1>Thanh toán</h1><p>Nhận tại quầy · Không tính phí giao hàng.</p></div>
         <div className="checkout-layout">
-          <div className="payment-card"><h2>Phương thức thanh toán</h2>
-            <button className={`payment-option ${method === 'WALLET' ? 'selected' : ''}`} onClick={() => setMethod('WALLET')} type="button">
+          <div className="payment-card">
+            <h2>Phương thức thanh toán</h2>
+            <button className={`payment-option ${method === 'WALLET' ? 'selected' : ''}`} disabled={checkoutBusy} onClick={() => setMethod('WALLET')} type="button">
               <span className="payment-icon wallet-icon">◈</span><span className="payment-copy"><strong>Ví điện tử</strong><small>Thanh toán nhanh chóng</small></span><span className="radio-mark" />
             </button>
-            <button className={`payment-option ${method === 'CARD' ? 'selected' : ''}`} onClick={() => setMethod('CARD')} type="button">
+            <button className={`payment-option ${method === 'CREDIT_CARD' ? 'selected' : ''}`} disabled={checkoutBusy} onClick={() => setMethod('CREDIT_CARD')} type="button">
               <span className="payment-icon card-icon">▤</span><span className="payment-copy"><strong>Thẻ ngân hàng</strong><small>Visa, Mastercard, nội địa</small></span><span className="radio-mark" />
             </button>
+
+            <div className="checkout-section-divider" />
+
+            <div className="checkout-subcard">
+              <div className="checkout-subcard__head">
+                <Tag size={17} className="checkout-subcard__icon" />
+                <h3>Mã ưu đãi / Voucher</h3>
+              </div>
+              <div className="checkout-promo-hints">
+                <span className="checkout-promo-hint-label"><Gift size={13} /> Gợi ý:</span>
+                <button
+                  type="button"
+                  className={`checkout-promo-chip ${appliedVoucher === 'GIAM10' ? 'is-applied' : ''}`}
+                  onClick={() => applyVoucher('GIAM10')}
+                  disabled={checkoutBusy}
+                >
+                  <strong>GIAM10</strong> · Giảm 10% (tối đa 50k)
+                </button>
+              </div>
+              {appliedVoucher ? (
+                <div className="checkout-voucher-applied">
+                  <div className="checkout-voucher-applied__info">
+                    <Check size={16} className="checkout-voucher-applied__icon" />
+                    <span>Mã ưu đãi <strong>{appliedVoucher}</strong> đã được áp dụng</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="checkout-voucher-remove"
+                    onClick={removeVoucher}
+                    disabled={checkoutBusy}
+                    title="Bỏ áp dụng mã này"
+                  >
+                    Bỏ chọn
+                  </button>
+                </div>
+              ) : (
+                <div className="checkout-input-group">
+                  <input
+                    className="checkout-input"
+                    type="text"
+                    placeholder="Nhập mã ưu đãi (ví dụ: GIAM10)"
+                    value={voucherInput}
+                    onChange={(e) => setVoucherInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        applyVoucher();
+                      }
+                    }}
+                    disabled={checkoutBusy}
+                    aria-label="Mã giảm giá"
+                  />
+                  <button
+                    className="button button-outline checkout-apply-btn"
+                    type="button"
+                    onClick={() => applyVoucher()}
+                    disabled={checkoutBusy || !voucherInput.trim()}
+                  >
+                    Áp dụng
+                  </button>
+                </div>
+              )}
+              {voucherError && <p className="checkout-field-error">{voucherError}</p>}
+            </div>
+
+            <div className="checkout-section-divider" />
+
+            <div className="checkout-subcard">
+              <div className="checkout-subcard__head">
+                <Award size={17} className="checkout-subcard__icon" />
+                <h3>Điểm thưởng BrewLite</h3>
+              </div>
+              {!token ? (
+                <div className="checkout-loyalty-prompt">
+                  <p>Đăng nhập tài khoản để tích điểm (10.000đ = 1 điểm) và dùng điểm thanh toán (1 điểm = 1.000đ).</p>
+                  <button
+                    className="button button-outline checkout-login-btn"
+                    type="button"
+                    onClick={() => { setAuthMode('login'); setAuthOpen(true); }}
+                  >
+                    Đăng nhập ngay
+                  </button>
+                </div>
+              ) : (
+                <div className="checkout-loyalty-body">
+                  <div className="checkout-loyalty-balance">
+                    <span>Số điểm hiện có:</span>
+                    <strong>{rewardPoints.toLocaleString('vi-VN')} điểm</strong>
+                    <small>({currency(rewardPoints * 1000)})</small>
+                  </div>
+                  {rewardPoints > 0 ? (
+                    <div className="checkout-loyalty-action">
+                      <label className="checkout-checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={usePoints}
+                          onChange={(e) => handleTogglePoints(e.target.checked)}
+                          disabled={checkoutBusy || maxUsablePoints <= 0}
+                        />
+                        <span>Sử dụng điểm thưởng để giảm giá đơn hàng</span>
+                      </label>
+                      {usePoints && (
+                        <div className="checkout-points-control">
+                          <div className="checkout-points-input-wrap">
+                            <input
+                              className="checkout-points-input"
+                              type="number"
+                              min={1}
+                              max={maxUsablePoints}
+                              value={pointsToUse || ''}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                if (Number.isNaN(val)) setPointsToUse(0);
+                                else setPointsToUse(Math.max(0, Math.min(val, maxUsablePoints)));
+                              }}
+                              disabled={checkoutBusy}
+                              aria-label="Số điểm muốn sử dụng"
+                            />
+                            <span className="checkout-points-unit">/ {maxUsablePoints.toLocaleString('vi-VN')} điểm khả dụng</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="button button-outline checkout-points-max"
+                            onClick={() => setPointsToUse(maxUsablePoints)}
+                            disabled={checkoutBusy || pointsToUse === maxUsablePoints}
+                          >
+                            Dùng tối đa
+                          </button>
+                        </div>
+                      )}
+                      {usePoints && pointsDiscount > 0 && (
+                        <div className="checkout-points-savings">
+                          Tiết kiệm <strong>{currency(pointsDiscount)}</strong> từ điểm thưởng
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="checkout-loyalty-note">
+                      Bạn chưa có điểm thưởng. Sau khi hoàn tất đơn này, bạn sẽ nhận được <strong>+{earnedPoints} điểm</strong>!
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="checkout-secure">⌑ <span>Thông tin thanh toán được bảo vệ an toàn.</span></div>
             {checkoutError && <p className="form-error" role="alert">{checkoutError}</p>}
             <button className="button button-primary button-full pay-button" disabled={checkoutBusy || items.length === 0} onClick={pay} type="button">
@@ -403,7 +773,9 @@ export default function Storefront({
             </button>
             <p className="terms-copy">Bằng việc tiếp tục, bạn đồng ý với điều khoản sử dụng của BrewLite.</p>
           </div>
-          <aside className="order-summary"><h2>Đơn hàng của bạn <span>{items.reduce((sum, item) => sum + item.quantity, 0)} món</span></h2>
+
+          <aside className="order-summary">
+            <h2>Đơn hàng của bạn <span>{items.reduce((sum, item) => sum + item.quantity, 0)} món</span></h2>
             {items.map((item) => {
               const options = normalizeProductOptions(item.options);
               const toppingsLabel = options.toppings.map(({ name }) => name).join(', ');
@@ -418,18 +790,87 @@ export default function Storefront({
                 </div>
               );
             })}
-            <div className="summary-total"><span>Tổng thanh toán</span><strong>{currency(total)}</strong></div>
+            <div className="summary-breakdown">
+              <div className="summary-breakdown-row">
+                <span>Tạm tính</span>
+                <span>{currency(subtotal)}</span>
+              </div>
+              {voucherDiscount > 0 && (
+                <div className="summary-breakdown-row is-discount">
+                  <span>Mã ưu đãi ({appliedVoucher})</span>
+                  <span>-{currency(voucherDiscount)}</span>
+                </div>
+              )}
+              {pointsDiscount > 0 && (
+                <div className="summary-breakdown-row is-discount">
+                  <span>Điểm thưởng ({actualPointsToUse} điểm)</span>
+                  <span>-{currency(pointsDiscount)}</span>
+                </div>
+              )}
+            </div>
+            <div className="summary-total">
+              <span>Tổng thanh toán</span>
+              <strong>{currency(total)}</strong>
+            </div>
+            {token && earnedPoints > 0 && (
+              <div className="summary-reward-note">
+                <Award size={14} />
+                <span>Nhận ngay <strong>+{earnedPoints} điểm</strong> khi đơn hoàn thành</span>
+              </div>
+            )}
           </aside>
         </div>
       </section>}
 
       {view === 'confirmation' && receipt && <section className="page-section confirmation-section">
-        <div className="confirmation-card"><div className="success-mark">✓</div><span className="eyebrow">CẢM ƠN BẠN ĐÃ ĐẶT MÓN</span>
-          <h1>Đơn hàng đã được xác nhận!</h1><p>Quán đã nhận được đơn và sẽ bắt đầu chuẩn bị ngay.</p>
-          <div className="receipt-details"><div><span>Mã đơn hàng</span><strong>#{receipt.id}</strong></div><div><span>Trạng thái</span><Status value={receipt.status} /></div>
-            <div><span>Phương thức</span><strong>{method === 'WALLET' ? 'Ví điện tử' : 'Thẻ ngân hàng'}</strong></div></div>
-          <div className="confirmation-actions"><button className="button button-primary" onClick={() => { setView('menu'); setReceipt(null); }} type="button">Đặt thêm món</button>
-            <button className="button button-outline" onClick={openHistory} type="button">Xem lịch sử đơn</button></div>
+        <div className="confirmation-card">
+          <div className="success-mark">✓</div>
+          <span className="eyebrow">CẢM ƠN BẠN ĐÃ ĐẶT MÓN</span>
+          <h1>Đặt hàng thành công!</h1>
+
+          <div className="pickup-callout">
+            <Coffee size={22} className="pickup-callout__icon" />
+            <div>
+              <strong>Mời tới quầy lấy nước</strong>
+              <p>Đồ uống đang được Barista chuẩn bị tươi mới cho bạn.</p>
+            </div>
+          </div>
+
+          <OrderStateStepper status={receipt.status} />
+
+          <div className="receipt-details">
+            <div><span>Mã đơn hàng</span><strong>#{receipt.id}</strong></div>
+            <div><span>Trạng thái</span><Status value={receipt.status} /></div>
+            <div><span>Phương thức</span><strong>{method === 'WALLET' ? 'Ví điện tử' : 'Thẻ ngân hàng'}</strong></div>
+            {typeof receipt.total === 'number' && (
+              <div><span>Tổng thanh toán</span><strong>{currency(receipt.total)}</strong></div>
+            )}
+            {typeof receipt.total === 'number' && Math.floor(receipt.total / 10000) > 0 && (
+              <div><span>Điểm thưởng nhận được</span><strong className="summary-points-earned">+{Math.floor(receipt.total / 10000)} điểm</strong></div>
+            )}
+          </div>
+
+          {['PENDING', 'PAID'].includes(receipt.status) && (
+            <div className="confirmation-cancel-wrap">
+              <button
+                type="button"
+                className="button-link-cancel"
+                onClick={() => cancelOrder(receipt.id)}
+                disabled={cancellingOrderId === receipt.id}
+              >
+                {cancellingOrderId === receipt.id ? 'Đang xử lý hủy...' : 'Hủy đơn hàng này'}
+              </button>
+            </div>
+          )}
+
+          <div className="confirmation-actions">
+            <button className="button button-primary" onClick={() => { setView('menu'); setReceipt(null); }} type="button">
+              Về trang chủ
+            </button>
+            <button className="button button-outline" onClick={openHistory} type="button">
+              Xem lịch sử đơn
+            </button>
+          </div>
         </div>
       </section>}
 
@@ -451,11 +892,19 @@ export default function Storefront({
               <button className="button button-outline" onClick={() => setView('menu')} type="button">← Về thực đơn</button>
             </header>
 
+            {cancelMessage && (
+              <div className={`history-alert is-${cancelMessage.type}`}>
+                <span>{cancelMessage.text}</span>
+                <button type="button" onClick={() => setCancelMessage(null)}>✕</button>
+              </div>
+            )}
+
             {history.length > 0 && (
               <>
                 <div className="history-stats">
                   <article className="history-stat"><span className="history-stat__icon"><ClipboardList size={20} /></span><div><span>Tổng đơn hàng</span><strong>{history.length}</strong></div></article>
-                  <article className="history-stat"><span className="history-stat__icon"><WalletCards size={20} /></span><div><span>Đã chi tiêu</span><strong>{currency(history.reduce((sum, order) => sum + order.total, 0))}</strong></div></article>
+                  <article className="history-stat"><span className="history-stat__icon"><WalletCards size={20} /></span><div><span>Đã chi tiêu</span><strong>{currency(successfulSpend(history))}</strong></div></article>
+                  <article className="history-stat"><span className="history-stat__icon"><Award size={20} /></span><div><span>Điểm tích lũy</span><strong>{rewardPoints.toLocaleString('vi-VN')} điểm</strong></div></article>
                 </div>
 
                 <div className="history-toolbar">
@@ -477,7 +926,7 @@ export default function Storefront({
                     {filteredHistory.map((order) => {
                       const orderKey = String(order.id);
                       const isExpanded = expandedOrders === null || expandedOrders.has(orderKey);
-                      const paymentMethod = order.payment?.[0]?.method;
+                      const paymentMethod = primaryPayment(order.payment)?.method;
                       return (
                         <article className={`history-order${isExpanded ? ' is-expanded' : ''}`} key={order.id}>
                           <button
@@ -486,13 +935,25 @@ export default function Storefront({
                             type="button"
                             aria-expanded={isExpanded}
                           >
-                            <span className="history-order__id"><strong>Mã đơn:</strong> BL{String(order.id).padStart(8, '0')}</span>
+                            <span className="history-order__id"><strong>Mã đơn:</strong> {orderCode(order.id)}</span>
                             <span className="history-order__date"><CalendarDays size={14} /> Đặt lúc: {formatOrderDate(order.createdAt)}</span>
                             <Status value={order.status} />
                             <ChevronDown className="history-order__chevron" size={17} />
                           </button>
                           {isExpanded && (
                             <div className="history-order__body">
+                              <OrderStateStepper status={order.status} />
+
+                              {order.status === 'READY' && (
+                                <div className="pickup-callout pickup-callout--ready">
+                                  <Coffee size={18} className="pickup-callout__icon" />
+                                  <div>
+                                    <strong>Mời bạn tới quầy lấy nước!</strong>
+                                    <p>Đồ uống đã được pha chế hoàn tất và đang chờ bạn nhận tại quầy.</p>
+                                  </div>
+                                </div>
+                              )}
+
                               <div className="history-order__items">
                                 {(order.items ?? []).map((item) => {
                                   const optionsSummary = [
@@ -520,12 +981,24 @@ export default function Storefront({
                               </div>
                               <div className="history-order__delivery">
                                 <div><MapPin size={16} /><span><strong>Hình thức nhận hàng</strong><small>Nhận tại cửa hàng</small></span></div>
-                                <div><CreditCard size={16} /><span><strong>Phương thức thanh toán</strong><small>{paymentMethod === 'CARD' ? 'Thẻ ngân hàng' : paymentMethod === 'WALLET' ? 'Ví điện tử' : 'Chưa có thông tin'}</small></span></div>
+                                <div><CreditCard size={16} /><span><strong>Phương thức thanh toán</strong><small>{paymentLabel(paymentMethod)}</small></span></div>
                               </div>
                               <div className="history-order__total">
                                 <div><span>Tạm tính</span><strong>{currency(order.total)}</strong></div>
                                 <div className="history-order__grand-total"><span>Tổng thanh toán · nhận tại quầy</span><strong>{currency(order.total)}</strong></div>
-                                <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
+                                <div className="history-order__actions-row">
+                                  {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
+                                    <button
+                                      type="button"
+                                      className="button button-outline history-order__cancel-btn"
+                                      onClick={() => cancelOrder(order.id)}
+                                      disabled={cancellingOrderId === order.id}
+                                    >
+                                      {cancellingOrderId === order.id ? 'Đang hủy...' : 'Hủy đơn'}
+                                    </button>
+                                  )}
+                                  <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
+                                </div>
                               </div>
                             </div>
                           )}

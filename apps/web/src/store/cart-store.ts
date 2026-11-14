@@ -19,6 +19,7 @@ type CartState = {
   setQuantity: (itemKey: string, quantity: number) => void;
   removeItem: (itemKey: string) => void;
   clearCart: () => void;
+  consumeItems: (snapshot: CartItem[]) => void;
 };
 
 export const useCartStore = create<CartState>()(
@@ -61,6 +62,21 @@ export const useCartStore = create<CartState>()(
           ),
         })),
       clearCart: () => set({ items: [] }),
+      // Remove only quantities confirmed by this payment; retain additions made meanwhile.
+      consumeItems: (snapshot) => set((state) => {
+        const quantities = new Map<string, number>();
+        for (const item of snapshot) {
+          const key = getCartItemKey(item.product.id, item.options);
+          quantities.set(key, (quantities.get(key) ?? 0) + item.quantity);
+        }
+        return {
+          items: state.items.flatMap((item) => {
+            const key = getCartItemKey(item.product.id, item.options);
+            const quantity = item.quantity - (quantities.get(key) ?? 0);
+            return quantity > 0 ? [{ ...item, quantity }] : [];
+          }),
+        };
+      }),
     }),
     {
       name: 'brewlite-cart',
