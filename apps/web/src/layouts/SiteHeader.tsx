@@ -123,9 +123,9 @@ export default function SiteHeader({
             ? <button className="site-header__cart" onClick={onCartClick} type="button" aria-label={`Giỏ hàng, ${cartCount} món`}><ShoppingCart aria-hidden="true" size={20} strokeWidth={1.8} /><span>{cartCount}</span></button>
             : <Link className="site-header__cart" href={cartHref ?? '/#menu'} aria-label={`Giỏ hàng, ${cartCount} món`}><ShoppingCart aria-hidden="true" size={20} strokeWidth={1.8} /><span>{cartCount}</span></Link>}
           {authenticated && profile && (
-            <div className="site-header__points" title={`Bạn có ${profile.rewardPoints.toLocaleString('vi-VN')} điểm thưởng`}>
+            <div className="site-header__points" title={`Điểm khả dụng để sử dụng. Tổng ${profile.rewardPoints.toLocaleString('vi-VN')} điểm, ${profile.pendingRewardPoints ?? 0} điểm chờ`}>
               <Award aria-hidden="true" size={14} />
-              <span>{profile.rewardPoints.toLocaleString('vi-VN')} điểm</span>
+              <span>{Math.max(0, profile.rewardPoints - (profile.pendingRewardPoints ?? 0)).toLocaleString('vi-VN')} điểm</span>
             </div>
           )}
           <div className="site-header__account-wrap" ref={accountMenuRef}>
@@ -150,7 +150,7 @@ export default function SiteHeader({
                         <span className="site-header__account-email">{profile.email}</span>
                         <div className="site-header__account-points">
                           <Award aria-hidden="true" size={13} />
-                          <span>Điểm thưởng: <strong>{profile.rewardPoints.toLocaleString('vi-VN')}</strong></span>
+                          <span>Tổng điểm: <strong>{profile.rewardPoints.toLocaleString('vi-VN')}</strong> · Chờ: {profile.pendingRewardPoints ?? 0}</span>
                         </div>
                       </div>
                     )}

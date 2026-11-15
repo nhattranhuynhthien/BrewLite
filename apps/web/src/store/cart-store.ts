@@ -20,7 +20,22 @@ type CartState = {
   removeItem: (itemKey: string) => void;
   clearCart: () => void;
   consumeItems: (snapshot: CartItem[]) => void;
+  syncCatalog: (products: Product[]) => void;
 };
+
+export function getProductQuantityInCart(items: CartItem[], productId: number): number {
+  return items.reduce(
+    (sum, item) => (item.product.id === productId ? sum + item.quantity : sum),
+    0,
+  );
+}
+
+export function getRemainingProductStock(
+  items: CartItem[],
+  product: Pick<Product, 'id' | 'stock'>,
+): number {
+  return Math.max(0, Math.floor(product.stock) - getProductQuantityInCart(items, product.id));
+}
 
 export const useCartStore = create<CartState>()(
   persist(
@@ -29,6 +44,10 @@ export const useCartStore = create<CartState>()(
       addItem: (product, quantity, options = defaultProductOptions()) =>
         set((state) => {
           const itemKey = getCartItemKey(product.id, options);
+          const remaining = getRemainingProductStock(state.items, product);
+          const allowed = Math.min(Math.max(0, Math.floor(quantity)), remaining);
+          if (allowed <= 0) return state;
+
           const existing = state.items.find(
             (item) => getCartItemKey(item.product.id, item.options) === itemKey,
           );
@@ -36,25 +55,41 @@ export const useCartStore = create<CartState>()(
             ? {
                 items: state.items.map((item) =>
                   getCartItemKey(item.product.id, item.options) === itemKey
-                    ? { ...item, quantity: item.quantity + quantity }
+                    ? { ...item, quantity: item.quantity + allowed }
                     : item,
                 ),
               }
-            : { items: [...state.items, { product, quantity, options }] };
+            : { items: [...state.items, { product, quantity: allowed, options }] };
         }),
       setQuantity: (itemKey, quantity) =>
-        set((state) => ({
-          items:
-            quantity < 1
-              ? state.items.filter(
-                  (item) => getCartItemKey(item.product.id, item.options) !== itemKey,
-                )
-              : state.items.map((item) =>
-                  getCartItemKey(item.product.id, item.options) === itemKey
-                    ? { ...item, quantity }
-                    : item,
-                ),
-        })),
+        set((state) => {
+          const target = state.items.find(
+            (item) => getCartItemKey(item.product.id, item.options) === itemKey,
+          );
+          if (!target) return state;
+          const otherVariantsQty = state.items.reduce(
+            (sum, item) =>
+              item.product.id === target.product.id &&
+              getCartItemKey(item.product.id, item.options) !== itemKey
+                ? sum + item.quantity
+                : sum,
+            0,
+          );
+          const maxForLine = Math.max(0, Math.floor(target.product.stock) - otherVariantsQty);
+          const nextQty = Math.min(Math.floor(quantity), maxForLine);
+          return {
+            items:
+              nextQty < 1
+                ? state.items.filter(
+                    (item) => getCartItemKey(item.product.id, item.options) !== itemKey,
+                  )
+                : state.items.map((item) =>
+                    getCartItemKey(item.product.id, item.options) === itemKey
+                      ? { ...item, quantity: nextQty }
+                      : item,
+                  ),
+          };
+        }),
       removeItem: (itemKey) =>
         set((state) => ({
           items: state.items.filter(
@@ -76,6 +111,27 @@ export const useCartStore = create<CartState>()(
             return quantity > 0 ? [{ ...item, quantity }] : [];
           }),
         };
+      }),
+      syncCatalog: (products) => set((state) => {
+        if (state.items.length === 0 || products.length === 0) return state;
+        const catalog = new Map(products.map((product) => [product.id, product]));
+        let changed = false;
+        const items = state.items.map((item) => {
+          const latest = catalog.get(item.product.id);
+          if (!latest) return item;
+          if (
+            latest.stock === item.product.stock &&
+            latest.isAvailable === item.product.isAvailable &&
+            latest.price === item.product.price &&
+            latest.name === item.product.name &&
+            latest.imageUrl === item.product.imageUrl
+          ) {
+            return item;
+          }
+          changed = true;
+          return { ...item, product: { ...item.product, ...latest } };
+        });
+        return changed ? { items } : state;
       }),
     }),
     {

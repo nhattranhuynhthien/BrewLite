@@ -6,10 +6,16 @@ export type CheckoutAttempt = {
   paymentMethod?: string;
 };
 
+export type OrderPaymentAttempt = {
+  paymentKey: string;
+  paymentMethod?: string;
+};
+
 export type ActiveCheckout = {
   storageKey: string;
   body: string;
   orderId?: number;
+  cartSnapshot?: unknown[];
 };
 
 function activeKey(token: string): string {
@@ -71,4 +77,91 @@ export function loadCheckoutAttempt(key: string): CheckoutAttempt {
 
 export function saveCheckoutAttempt(key: string, attempt: CheckoutAttempt) {
   localStorage.setItem(key, JSON.stringify(attempt));
+}
+
+function orderPayKey(token: string, orderId: number | string): string {
+  const id = getUserIdFromAccessToken(token);
+  if (!id) throw new Error('Vui lòng đăng nhập lại trước khi thanh toán.');
+  return `brewlite-order-pay:${id}:${orderId}`;
+}
+
+export function saveOrderPaymentAttempt(key: string, attempt: OrderPaymentAttempt) {
+  const raw = localStorage.getItem(key) ?? sessionStorage.getItem(key);
+  const existing = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  const next: Record<string, unknown> = { ...existing, paymentKey: attempt.paymentKey };
+  if (attempt.paymentMethod) {
+    next.paymentMethod = attempt.paymentMethod;
+  } else {
+    delete next.paymentMethod;
+  }
+  localStorage.setItem(key, JSON.stringify(next));
+}
+
+export function loadOrderPaymentAttempt(
+  token: string,
+  orderId: number | string,
+  orderStatus: string,
+): { storageKey: string; attempt: OrderPaymentAttempt; linkedCheckoutKey: string | null } {
+  const numericOrderId = Number(orderId);
+  const active = getActiveCheckout(token);
+  if (active && Number.isInteger(numericOrderId) && active.orderId === numericOrderId) {
+    const attempt = loadCheckoutAttempt(active.storageKey);
+    if (orderStatus === 'PAYMENT_FAILED' && attempt.paymentMethod) {
+      attempt.paymentKey = crypto.randomUUID();
+      delete attempt.paymentMethod;
+      saveCheckoutAttempt(active.storageKey, attempt);
+    }
+    return { storageKey: active.storageKey, attempt, linkedCheckoutKey: active.storageKey };
+  }
+
+  const storageKey = orderPayKey(token, orderId);
+  const raw = localStorage.getItem(storageKey) ?? sessionStorage.getItem(storageKey);
+  if (raw) {
+    const saved = JSON.parse(raw) as OrderPaymentAttempt;
+    if (typeof saved.paymentKey !== 'string') {
+      throw new Error('Thông tin thanh toán đã lưu không hợp lệ. Vui lòng kiểm tra lịch sử đơn.');
+    }
+    if (orderStatus === 'PAYMENT_FAILED' && saved.paymentMethod) {
+      saved.paymentKey = crypto.randomUUID();
+      delete saved.paymentMethod;
+      saveOrderPaymentAttempt(storageKey, saved);
+    }
+    return { storageKey, attempt: saved, linkedCheckoutKey: null };
+  }
+
+  const attempt: OrderPaymentAttempt = { paymentKey: crypto.randomUUID() };
+  saveOrderPaymentAttempt(storageKey, attempt);
+  return { storageKey, attempt, linkedCheckoutKey: null };
+}
+
+export function finishOrderPaymentAttempt(
+  token: string,
+  storageKey: string,
+  orderId: number | string,
+  linkedCheckoutKey: string | null,
+) {
+  const fallbackKey = orderPayKey(token, orderId);
+  localStorage.removeItem(storageKey);
+  sessionStorage.removeItem(storageKey);
+  localStorage.removeItem(fallbackKey);
+  sessionStorage.removeItem(fallbackKey);
+  if (linkedCheckoutKey) {
+    finishCheckout(token, linkedCheckoutKey);
+  }
+}
+
+export function clearLinkedCheckoutForOrder(token: string | null, orderId: number | string) {
+  if (!token) return;
+  const numericOrderId = Number(orderId);
+  const fallbackKey = orderPayKey(token, orderId);
+  localStorage.removeItem(fallbackKey);
+  sessionStorage.removeItem(fallbackKey);
+  try {
+    const active = getActiveCheckout(token);
+    if (active && Number.isInteger(numericOrderId) && active.orderId === numericOrderId) {
+      finishCheckout(token, active.storageKey);
+    }
+  } catch {
+    // Ignore malformed checkout storage during cleanup after order cancellation.
+  }
 }

@@ -237,6 +237,11 @@ remote trong lần cập nhật này vì không push code.
 
 ## API vận hành đơn hàng
 
+Điểm được cộng ngay khi thanh toán nhưng ở trạng thái chờ; chỉ dùng được khi đơn
+chuyển sang PREPARING. Hủy trước pha chế thu hồi điểm chờ. Xem
+[chính sách điểm chờ và dữ liệu cũ](docs/chinh-sach-huy-don-va-diem.md).
+Migration `20261115000000_pending_rewards` bổ sung dữ liệu điểm chờ, không reset DB.
+
 Quản trị viên đặt `ORDER_OPERATOR_USER_IDS=7,9` cho các tài khoản nhân viên hiện có
 ở backend (Compose đọc biến từ `.env`). Để trống sẽ chặn toàn bộ API vận hành.
 Khách không thể tự cấp quyền bằng đăng ký, profile hoặc request body.

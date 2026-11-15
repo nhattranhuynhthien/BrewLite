@@ -91,3 +91,164 @@ test('a delayed 401 cannot sign out the account selected after the request start
     global.fetch = originalFetch;
   }
 });
+
+test('cart store enforces total stock limit across repeated adds and multiple variants', () => {
+  const { useCartStore, getProductQuantityInCart, getRemainingProductStock } = load('store/cart-store.ts');
+  const limited = { id: 10, name: 'Matcha', price: 45000, stock: 3, imageUrl: null };
+  useCartStore.getState().clearCart();
+
+  useCartStore.getState().addItem(limited, 2, { size: 'M', toppings: [], sweetness: 'Bình thường', ice: 'Bình thường', note: '' });
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 2);
+  assert.equal(getRemainingProductStock(useCartStore.getState().items, limited), 1);
+
+  // Adding a second variant requests 2, but store caps total across all variants to stock (3).
+  useCartStore.getState().addItem(limited, 2, { size: 'L', toppings: [], sweetness: 'Ít đường', ice: 'Bình thường', note: '' });
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 3);
+  assert.equal(getRemainingProductStock(useCartStore.getState().items, limited), 0);
+
+  // Adding again does nothing once stock is exhausted.
+  useCartStore.getState().addItem(limited, 1, { size: 'M', toppings: [], sweetness: 'Bình thường', ice: 'Bình thường', note: '' });
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 3);
+
+  // setQuantity cannot increase one variant above remaining stock considering the other variant.
+  const { getCartItemKey } = load('lib/product-options.ts');
+  const mKey = getCartItemKey(10, { size: 'M', toppings: [], sweetness: 'Bình thường', ice: 'Bình thường', note: '' });
+  useCartStore.getState().setQuantity(mKey, 5);
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 3);
+});
+
+test('order quote fetches server voucher discount and rejects invalid/exhausted codes', async () => {
+  const quoteLib = load('lib/order-quote.ts');
+  const originalFetch = global.fetch;
+  const product = { id: 5, name: 'Cold Brew', price: 50000, stock: 10, imageUrl: null };
+  const cart = [{ product, quantity: 2 }];
+
+  try {
+    global.fetch = async (url, init) => {
+      assert.match(String(url), /\/orders\/quote$/);
+      const sent = JSON.parse(init.body);
+      if (sent.voucherCode === 'VIP25') {
+        return new Response(JSON.stringify({
+          subtotal: 100000,
+          voucherCode: 'VIP25',
+          voucherDiscount: 25000,
+          voucher: { code: 'VIP25', discountPct: 25, maxDiscount: 40000 },
+          totalAfterVoucher: 75000,
+          pointsToUse: 0,
+          pointsDiscount: 0,
+          total: 75000,
+          earnedPoints: 7,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ message: 'Mã giảm giá không hợp lệ hoặc đã hết hạn!' }), {
+        status: 400, headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const valid = await quoteLib.fetchOrderQuote({ items: cart, voucherCode: 'VIP25' });
+    assert.equal(valid.voucherDiscount, 25000);
+    assert.equal(valid.total, 75000);
+
+    await assert.rejects(
+      quoteLib.fetchOrderQuote({ items: cart, voucherCode: 'EXPIRED' }),
+      err => err.status === 400 && /không hợp lệ|hết hạn/.test(err.message),
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('history order payment shares unfinished checkout key and rotates key after PAYMENT_FAILED', async () => {
+  localStorage.clear();
+  sessionStorage.clear();
+  const api = load('lib/api.ts');
+  const userToken = token(21);
+  api.setAccessToken(userToken);
+  const { submitOrderPayment } = load('lib/order-payment.ts');
+  const orderBody = JSON.stringify({ items: [{ productId: 3, quantity: 1 }] });
+  const storageKey = await checkout.checkoutStorageKey(userToken, orderBody);
+  const checkoutAttempt = checkout.loadCheckoutAttempt(storageKey);
+  checkout.saveActiveCheckout(userToken, { storageKey, body: orderBody, orderId: 99 });
+
+  // While PENDING with no prior payment call, loadOrderPaymentAttempt shares the active paymentKey.
+  const loadedPending = checkout.loadOrderPaymentAttempt(userToken, 99, 'PENDING');
+  assert.equal(loadedPending.storageKey, storageKey);
+  assert.equal(loadedPending.linkedCheckoutKey, storageKey);
+  assert.equal(loadedPending.attempt.paymentKey, checkoutAttempt.paymentKey);
+
+  const originalFetch = global.fetch;
+  const sentHeaders = [];
+  try {
+    let callCount = 0;
+    global.fetch = async (_url, init) => {
+      callCount += 1;
+      const headers = new Headers(init.headers);
+      sentHeaders.push({ key: headers.get('Idempotency-Key'), body: JSON.parse(init.body) });
+      if (callCount === 1) {
+        return new Response(JSON.stringify({ status: 'FAILED', orderStatus: 'PAYMENT_FAILED', message: 'Thẻ từ chối' }), {
+          status: 201, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ status: 'PAID', orderStatus: 'PAID', order: { id: 99, status: 'PAID' } }), {
+        status: 201, headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    await assert.rejects(
+      submitOrderPayment({
+        token: userToken,
+        storageKey: loadedPending.storageKey,
+        attempt: loadedPending.attempt,
+        orderId: 99,
+        amount: 35000,
+        method: 'CREDIT_CARD',
+        orderStatus: 'PENDING',
+      }),
+      err => /Thẻ từ chối/.test(err.message),
+    );
+
+    // Also test stale paymentMethod left on disk when status on server is PAYMENT_FAILED (e.g. crash before cleanup).
+    checkout.saveOrderPaymentAttempt(loadedPending.storageKey, {
+      paymentKey: checkoutAttempt.paymentKey,
+      paymentMethod: 'CREDIT_CARD',
+    });
+    const loadedRetry = checkout.loadOrderPaymentAttempt(userToken, 99, 'PAYMENT_FAILED');
+    assert.notEqual(loadedRetry.attempt.paymentKey, checkoutAttempt.paymentKey);
+    assert.equal(loadedRetry.attempt.paymentMethod, undefined);
+
+    const paid = await submitOrderPayment({
+      token: userToken,
+      storageKey: loadedRetry.storageKey,
+      attempt: loadedRetry.attempt,
+      orderId: 99,
+      amount: 35000,
+      method: 'MOMO',
+      orderStatus: 'PAYMENT_FAILED',
+    });
+    assert.equal(paid.resolvedStatus, 'PAID');
+    assert.equal(sentHeaders[0].body.method, 'CREDIT_CARD');
+    assert.equal(sentHeaders[1].body.method, 'MOMO');
+    assert.notEqual(sentHeaders[0].key, sentHeaders[1].key);
+
+    checkout.finishOrderPaymentAttempt(userToken, loadedRetry.storageKey, 99, loadedRetry.linkedCheckoutKey);
+    assert.equal(checkout.getActiveCheckout(userToken), null);
+  } finally {
+    global.fetch = originalFetch;
+    api.setAccessToken(null);
+  }
+});
+
+test('cart store syncCatalog updates remaining stock without wiping user items', () => {
+  const { useCartStore, getRemainingProductStock } = load('store/cart-store.ts');
+  const cup = { id: 33, name: 'Latte Cuối', price: 45000, stock: 1, isAvailable: true, imageUrl: null };
+  useCartStore.getState().clearCart();
+  useCartStore.getState().addItem(cup, 1);
+  assert.equal(getRemainingProductStock(useCartStore.getState().items, cup), 0);
+
+  // Another customer buys the last cup: stock drops to 0.
+  useCartStore.getState().syncCatalog([{ ...cup, stock: 0, isAvailable: false }]);
+  const synced = useCartStore.getState().items;
+  assert.equal(synced.length, 1);
+  assert.equal(synced[0].product.stock, 0);
+  assert.equal(synced[0].product.isAvailable, false);
+});

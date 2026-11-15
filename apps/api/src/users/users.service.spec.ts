@@ -31,7 +31,7 @@ describe('UsersService', () => {
     await expect(service.findOne(2)).resolves.toBe(profile);
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
       where: { id: 2 },
-      select: { id: true, name: true, email: true, rewardPoints: true, createdAt: true },
+      select: { id: true, name: true, email: true, rewardPoints: true, pendingRewardPoints: true, createdAt: true },
     });
   });
 });

@@ -1,10 +1,14 @@
 'use client';
 
+import { useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeft, Award, ClipboardCheck, MapPin, Minus, Plus, ShieldCheck, ShoppingCart, Tag, Trash2 } from 'lucide-react';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useCartPage } from '@/hooks/useCartPage';
+import { apiFetch } from '@/lib/api';
+import { getProductQuantityInCart, useCartStore } from '@/store/cart-store';
+import type { Product } from '@/types/product';
 import {
   getCartItemKey,
   getConfiguredUnitPrice,
@@ -24,6 +28,19 @@ export default function CartPage() {
     total,
     totalQuantity,
   } = useCartPage();
+  const syncCatalog = useCartStore((state) => state.syncCatalog);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch<Product[]>('/products')
+      .then(async (products) => {
+        if (!active || !Array.isArray(products)) return;
+        await useCartStore.persist.rehydrate();
+        if (active) syncCatalog(products);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [syncCatalog]);
 
   return (
     <div className="cart-page">
@@ -76,6 +93,9 @@ export default function CartPage() {
                   const itemKey = getCartItemKey(product.id, item.options);
                   const unitPrice = getConfiguredUnitPrice(product, item.options);
                   const selectedToppings = options.toppings.map(({ name }) => name).join(', ');
+                  const totalForProduct = getProductQuantityInCart(items, product.id);
+                  const overStock = totalForProduct > product.stock;
+                  const atStockLimit = totalForProduct >= product.stock;
                   return (
                     <article className="cart-item" key={itemKey}>
                       <div className="cart-item__image">
@@ -92,6 +112,13 @@ export default function CartPage() {
                           {options.note ? ` · Ghi chú: ${options.note}` : ''}
                         </p>
                         <strong>{formatPrice(unitPrice)}</strong>
+                        {atStockLimit && (
+                          <small className={`cart-item__stock-note${overStock ? ' is-over' : ''}`}>
+                            {overStock
+                              ? `Vượt tồn kho (${totalForProduct}/${product.stock}) · Hãy giảm bớt số lượng`
+                              : `Đã đạt tối đa tồn kho (${product.stock})`}
+                          </small>
+                        )}
                       </div>
                       <div className="cart-quantity" aria-label={`Số lượng ${product.name}`}>
                         <button
@@ -102,7 +129,7 @@ export default function CartPage() {
                         <span>{quantity}</span>
                         <button
                           aria-label={`Tăng số lượng ${product.name}`}
-                          disabled={quantity >= product.stock}
+                          disabled={atStockLimit}
                           onClick={() => setQuantity(itemKey, quantity + 1)}
                           type="button"
                         ><Plus aria-hidden="true" size={13} /></button>
@@ -137,7 +164,7 @@ export default function CartPage() {
                 </div>
                 <div className="cart-points-hint">
                   <Award aria-hidden="true" size={13} />
-                  <span>Tích lũy <strong>+{Math.floor(subtotal / 10000)} điểm</strong> khi hoàn thành đơn</span>
+                  <span>Dự kiến <strong>+{Math.floor(subtotal / 10000)} điểm chờ</strong> khi thanh toán (mở khóa lúc pha chế)</span>
                 </div>
                 <div className="cart-summary__total"><strong>Tổng cộng</strong><strong>{formatPrice(total)}</strong></div>
                 <div className="cart-delivery-note">

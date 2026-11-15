@@ -20,6 +20,7 @@ const formatPrice = (amount: number) => `${amount.toLocaleString('vi-VN')}đ`;
 
 interface Props {
   product: Product;
+  inCartQuantity?: number;
   toppings: ToppingOption[];
   toppingsLoading: boolean;
   toppingsError: string;
@@ -30,6 +31,7 @@ interface Props {
 
 export default function ProductDetailModal({
   product,
+  inCartQuantity = 0,
   toppings,
   toppingsLoading,
   toppingsError,
@@ -50,7 +52,11 @@ export default function ProductDetailModal({
     product.price +
     SIZE_EXTRA_PRICES[size] +
     selectedToppings.reduce((sum, topping) => sum + topping.extraPrice, 0);
-  const available = product.isAvailable && product.stock > 0;
+  const remainingStock = Math.max(0, Math.floor(product.stock) - inCartQuantity);
+  const outOfStock = !product.isAvailable || product.stock <= 0;
+  const stockLimitReached = !outOfStock && remainingStock === 0;
+  const available = !outOfStock && remainingStock > 0;
+  const safeQuantity = available ? Math.max(1, Math.min(quantity, remainingStock)) : 1;
   const options: SelectedProductOptions = {
     size,
     toppings: selectedToppings,
@@ -207,22 +213,29 @@ export default function ProductDetailModal({
               <button
                 type="button"
                 aria-label="Giảm số lượng"
-                disabled={quantity <= 1}
-                onClick={() => setQuantity((value) => Math.max(1, value - 1))}
+                disabled={!available || safeQuantity <= 1}
+                onClick={() => setQuantity((value) => Math.max(1, Math.min(value, remainingStock) - 1))}
               >
                 <Minus size={16} />
               </button>
-              <output aria-live="polite">{quantity}</output>
+              <output aria-live="polite">{available ? safeQuantity : 0}</output>
               <button
                 type="button"
                 aria-label="Tăng số lượng"
-                disabled={quantity >= product.stock}
-                onClick={() => setQuantity((value) => Math.min(product.stock, value + 1))}
+                disabled={!available || safeQuantity >= remainingStock}
+                onClick={() => setQuantity((value) => Math.min(remainingStock, value + 1))}
               >
                 <Plus size={16} />
               </button>
             </div>
           </div>
+          {!outOfStock && inCartQuantity > 0 && (
+            <p className={`product-modal__stock-note${stockLimitReached ? ' is-limit' : ''}`} role="status">
+              {stockLimitReached
+                ? `Trong giỏ đã có đủ tối đa ${product.stock} sản phẩm hiện có trong kho.`
+                : `Trong giỏ đã có ${inCartQuantity} · Còn thêm tối đa ${remainingStock}/${product.stock} sản phẩm.`}
+            </p>
+          )}
 
           <label className="product-modal__note">
             <span>Ghi chú</span>
@@ -239,10 +252,14 @@ export default function ProductDetailModal({
             type="button"
             className="product-modal__submit"
             disabled={!available || toppingsLoading || Boolean(toppingsError)}
-            onClick={() => onAdd(product, quantity, options)}
+            onClick={() => onAdd(product, safeQuantity, options)}
           >
             <ShoppingCart size={20} />
-            {available ? `Thêm vào giỏ hàng · ${formatPrice(price * quantity)}` : 'Tạm hết hàng'}
+            {outOfStock
+              ? 'Tạm hết hàng'
+              : stockLimitReached
+                ? 'Đã đạt giới hạn kho trong giỏ'
+                : `Thêm vào giỏ hàng · ${formatPrice(price * safeQuantity)}`}
           </button>
         </div>
       </section>
