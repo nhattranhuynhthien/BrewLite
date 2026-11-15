@@ -8,6 +8,7 @@ import { JwtService } from '@nestjs/jwt';
 describe('OrdersController', () => {
   let controller: OrdersController;
   const ordersService = {
+    quote: jest.fn(),
     findByUser: jest.fn(),
     cancel: jest.fn(),
   };
@@ -52,5 +53,14 @@ describe('OrdersController', () => {
 
     expect(controller.cancel(7, request)).toBe(order);
     expect(ordersService.cancel).toHaveBeenCalledWith(7, 42);
+  });
+
+  it('delegates order quote preview to ordersService.quote', () => {
+    const dto = { items: [{ productId: 1, quantity: 2 }], voucherCode: 'GIAM10' };
+    const quoted = { subtotal: 70000, voucherDiscount: 7000, total: 63000 };
+    ordersService.quote.mockReturnValue(quoted);
+
+    expect(controller.quote(dto)).toBe(quoted);
+    expect(ordersService.quote).toHaveBeenCalledWith(dto);
   });
 });

@@ -22,6 +22,8 @@
 .cart-item__details h3 { overflow: hidden; margin: 0 0 4px; color: #27392f; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .cart-item__details p { overflow: hidden; margin: 0 0 5px; color: #829087; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .cart-item__details strong, .cart-item__total { color: #228047; font-size: 10px; }
+.cart-item__stock-note { display: block; margin-top: 3px; color: #7d5218; font-size: 9px; }
+.cart-item__stock-note.is-over { color: #aa463d; font-weight: 600; }
 .cart-quantity { width: 72px; height: 24px; display: flex; align-items: center; justify-content: space-between; border: 1px solid #e9eee9; border-radius: 14px; background: #f7faf6; }
 .cart-quantity button { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: #edf4ec; color: #315d42; cursor: pointer; }
 .cart-quantity button:disabled { color: #aab4ac; cursor: not-allowed; }

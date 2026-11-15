@@ -1,8 +1,8 @@
 import { IntIdPipe } from '../common/int-id.pipe';
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req, Headers } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req, Headers, HttpCode, HttpStatus } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
 import type { AuthenticatedRequest } from '../auth/authenticated-request';
 import { OrderOperatorGuard } from './order-operator.guard';
@@ -13,6 +13,13 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  @Post('quote')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Kiểm tra tồn kho, voucher và báo giá đơn hàng từ server trước khi thanh toán' })
+  quote(@Body() quoteOrderDto: CreateOrderDto) {
+    return this.ordersService.quote(quoteOrderDto);
+  }
 
   @UseGuards(AuthGuard)
   @Post()

@@ -17,6 +17,7 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   rewardPoints Int      @default(0)
+  pendingRewardPoints Int @default(0)
 }
 
 model Product {
@@ -44,6 +45,7 @@ model Promotion {
 }
 
 model Order {
+  rewardPointsEarned Int @default(0)
   paymentAttemptKey String?
   pointsUsed Int @default(0)
   promotionId Int?

@@ -94,7 +94,8 @@
 
 @media (max-width: 420px) {
   .site-header__brand-copy small { display: none; }
-  .site-header__nav { gap: 10px; }
+  .site-header__nav { display: none; }
+  .site-header__icon { display: none; }
   .site-header__link { font-size: 10px; }
   .site-header__actions { gap: 2px; }
 }

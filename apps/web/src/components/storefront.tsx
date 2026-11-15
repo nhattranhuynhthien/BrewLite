@@ -33,9 +33,10 @@ import {
   getConfiguredUnitPrice,
   normalizeProductOptions,
 } from '@/lib/product-options';
-import { useCartStore } from '@/store/cart-store';
+import { getProductQuantityInCart, useCartStore } from '@/store/cart-store';
 import { useToppings } from '@/hooks/useToppings';
 import { checkoutStorageKey, loadCheckoutAttempt, saveCheckoutAttempt, getActiveCheckout, saveActiveCheckout, finishCheckout, withCheckoutLock } from '@/lib/checkout-attempt';
+import { buildOrderItemsPayload, fetchOrderQuote, type OrderQuote } from '@/lib/order-quote';
 import { matchesOrderCode, orderCode, paymentLabel, primaryPayment, successfulSpend, type HistoryPayment } from '@/lib/order-history';
 import type { Product } from '@/types/product';
 
@@ -45,6 +46,7 @@ type Order = {
   id: number | string;
   total: number;
   status: string;
+  rewardPointsEarned?: number;
   createdAt?: string;
   items?: {
     id: number;
@@ -59,6 +61,49 @@ type Order = {
   }[];
   payment?: HistoryPayment[];
 };
+
+function LoyaltyPolicyTable({
+  samplePoints,
+  caption,
+  compact = false,
+}: {
+  samplePoints: number;
+  caption: string;
+  compact?: boolean;
+}) {
+  const points = samplePoints > 0 ? samplePoints : 5;
+  return (
+    <div className={`loyalty-policy-wrap${compact ? ' is-compact' : ''}`}>
+      <p className="loyalty-policy-caption">{caption}</p>
+      <table className="loyalty-policy-table" aria-label="Chính sách điểm chờ và hủy đơn">
+        <thead>
+          <tr>
+            <th>Thời điểm</th>
+            <th>Điểm được ghi nhận</th>
+            <th>Điểm có thể dùng</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Thanh toán thành công (<code>PAID</code>)</td>
+            <td>+{points}</td>
+            <td>0 — đang chờ</td>
+          </tr>
+          <tr>
+            <td>Bắt đầu pha chế (<code>PREPARING</code>)</td>
+            <td>Giữ nguyên {points}</td>
+            <td>{points}</td>
+          </tr>
+          <tr>
+            <td>Hủy trước pha chế (<code>CANCELLED</code>)</td>
+            <td>Thu hồi {points}</td>
+            <td>0</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 const currency = (amount: number) =>
   new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
@@ -167,10 +212,20 @@ export default function Storefront({
   const [historyRequest, setHistoryRequest] = useState(0);
   const [historySearch, setHistorySearch] = useState('');
   const [expandedOrders, setExpandedOrders] = useState<Set<string> | null>(null);
-  const { rewardPoints, refetch: refetchProfile } = useUserProfile();
+  const { rewardPoints, pendingRewardPoints, availableRewardPoints, refetch: refetchProfile } = useUserProfile();
   const [voucherInput, setVoucherInput] = useState('');
   const [appliedVoucher, setAppliedVoucher] = useState<string | null>(null);
   const [voucherError, setVoucherError] = useState('');
+  const [voucherBusy, setVoucherBusy] = useState(false);
+  const [serverQuoteState, setServerQuoteState] = useState<{
+    quoteKey: string;
+    itemsKey: string;
+    data: OrderQuote;
+  } | null>(null);
+  const [quoteErrorState, setQuoteErrorState] = useState<{
+    quoteKey: string;
+    message: string;
+  } | null>(null);
   const [usePoints, setUsePoints] = useState(false);
   const [pointsToUse, setPointsToUse] = useState(0);
   const [receipt, setReceipt] = useState<{ id: number | string; total?: number; status: string } | null>(null);
@@ -178,6 +233,8 @@ export default function Storefront({
   const [cancellingOrderId, setCancellingOrderId] = useState<number | string | null>(null);
   const [cancelMessage, setCancelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const checkoutInFlight = useRef(false);
+  const quoteSeqRef = useRef(0);
+  const lastQuotedKeyRef = useRef<string | null>(null);
 
   function handleCopyVoucher(code: string) {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -188,7 +245,7 @@ export default function Storefront({
   }
 
   async function cancelOrder(orderId: number | string) {
-    if (!window.confirm(`Bạn có chắc chắn muốn hủy đơn hàng #${orderId} không?`)) return;
+    if (!window.confirm(`Hủy đơn hàng #${orderId}?\n\nKho, điểm đã đổi và lượt voucher sẽ được hoàn lại. Nếu đơn đã thanh toán, hệ thống ghi nhận hoàn tiền mô phỏng và thu hồi điểm chờ của đơn. Điểm chỉ được sử dụng khi quán bắt đầu pha chế; từ lúc đó đơn không còn được hủy.`)) return;
     setCancellingOrderId(orderId);
     setCancelMessage(null);
     try {
@@ -266,40 +323,116 @@ export default function Storefront({
       ? products.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
       : featuredProducts;
   }, [products, searchQuery]);
-  const subtotal = useMemo(
+  const itemsPayloadKey = useMemo(
+    () => JSON.stringify(buildOrderItemsPayload(items)),
+    [items],
+  );
+  const clientSubtotal = useMemo(
     () => items.reduce((sum, item) => sum + getConfiguredUnitPrice(item.product, item.options) * item.quantity, 0),
     [items],
   );
-  const voucherDiscount = useMemo(() => {
-    if (!appliedVoucher) return 0;
-    if (appliedVoucher.toUpperCase() === 'GIAM10') {
-      return Math.min(Math.round(subtotal * 0.1), 50000);
-    }
-    return 0;
-  }, [appliedVoucher, subtotal]);
+  const activeQuote =
+    serverQuoteState &&
+    serverQuoteState.itemsKey === itemsPayloadKey &&
+    (serverQuoteState.data.voucherCode ?? null) === (appliedVoucher ?? null)
+      ? serverQuoteState.data
+      : null;
+  const subtotal = activeQuote ? activeQuote.subtotal : clientSubtotal;
+  const voucherDiscount = appliedVoucher && activeQuote ? activeQuote.voucherDiscount : 0;
 
   const totalAfterVoucher = Math.max(0, subtotal - voucherDiscount);
-  const maxUsablePoints = Math.min(rewardPoints, Math.floor(totalAfterVoucher / 1000));
+  const maxUsablePoints = Math.max(0, Math.min(availableRewardPoints, Math.floor(totalAfterVoucher / 1000)));
   const actualPointsToUse = usePoints ? Math.min(pointsToUse, maxUsablePoints) : 0;
   const pointsDiscount = actualPointsToUse * 1000;
-  const total = Math.max(0, totalAfterVoucher - pointsDiscount);
-  const earnedPoints = Math.floor(total / 10000);
+  const currentQuoteKey = `${itemsPayloadKey}|${appliedVoucher ?? ''}|${actualPointsToUse}`;
+  const exactQuote = activeQuote && activeQuote.pointsToUse === actualPointsToUse ? activeQuote : null;
+  const total = exactQuote ? exactQuote.total : Math.max(0, totalAfterVoucher - pointsDiscount);
+  const earnedPoints = exactQuote ? exactQuote.earnedPoints : Math.floor(total / 10000);
+  const quoteError = quoteErrorState?.quoteKey === currentQuoteKey ? quoteErrorState.message : '';
+  const quoteBusy =
+    view === 'checkout' &&
+    items.length > 0 &&
+    serverQuoteState?.quoteKey !== currentQuoteKey &&
+    quoteErrorState?.quoteKey !== currentQuoteKey;
 
-  function applyVoucher(code?: string) {
-    const target = (code ?? voucherInput).trim().toUpperCase();
+  useEffect(() => {
+    if (view !== 'checkout' || items.length === 0) return;
+    if (lastQuotedKeyRef.current === currentQuoteKey) return;
+    const seq = ++quoteSeqRef.current;
+    let active = true;
+    fetchOrderQuote({
+      items,
+      voucherCode: appliedVoucher,
+      pointsToUse: actualPointsToUse,
+    })
+      .then((data) => {
+        if (!active || seq !== quoteSeqRef.current) return;
+        const confirmedKey = `${itemsPayloadKey}|${data.voucherCode ?? ''}|${actualPointsToUse}`;
+        lastQuotedKeyRef.current = confirmedKey;
+        setQuoteErrorState(null);
+        setServerQuoteState({ quoteKey: confirmedKey, itemsKey: itemsPayloadKey, data });
+      })
+      .catch((error: unknown) => {
+        if (!active || seq !== quoteSeqRef.current) return;
+        const message = error instanceof Error ? error.message : 'Không thể xác nhận báo giá từ server.';
+        if (appliedVoucher) {
+          lastQuotedKeyRef.current = null;
+          setAppliedVoucher(null);
+          setServerQuoteState(null);
+          setVoucherError(message);
+        } else {
+          lastQuotedKeyRef.current = currentQuoteKey;
+          setQuoteErrorState({ quoteKey: currentQuoteKey, message });
+        }
+      });
+    return () => { active = false; };
+  }, [view, items, itemsPayloadKey, appliedVoucher, actualPointsToUse, currentQuoteKey]);
+
+  async function applyVoucher(code?: string) {
+    const target = (code ?? voucherInput).trim();
     if (!target) {
       setVoucherError('Vui lòng nhập mã ưu đãi');
       return;
     }
-    setAppliedVoucher(target);
-    setVoucherInput(target);
+    if (items.length === 0) {
+      setVoucherError('Giỏ hàng đang trống');
+      return;
+    }
+    const seq = ++quoteSeqRef.current;
+    setVoucherBusy(true);
     setVoucherError('');
+    setQuoteErrorState(null);
+    try {
+      const quoted = await fetchOrderQuote({
+        items,
+        voucherCode: target,
+        pointsToUse: actualPointsToUse,
+      });
+      if (seq !== quoteSeqRef.current) return;
+      const confirmedKey = `${itemsPayloadKey}|${quoted.voucherCode ?? ''}|${actualPointsToUse}`;
+      lastQuotedKeyRef.current = confirmedKey;
+      setServerQuoteState({ quoteKey: confirmedKey, itemsKey: itemsPayloadKey, data: quoted });
+      setAppliedVoucher(quoted.voucherCode);
+      setVoucherInput(quoted.voucherCode ?? target);
+    } catch (error) {
+      if (seq !== quoteSeqRef.current) return;
+      lastQuotedKeyRef.current = null;
+      setAppliedVoucher(null);
+      setServerQuoteState(null);
+      setVoucherError(error instanceof Error ? error.message : 'Mã giảm giá không hợp lệ hoặc đã hết hạn!');
+    } finally {
+      if (seq === quoteSeqRef.current) {
+        setVoucherBusy(false);
+      }
+    }
   }
 
   function removeVoucher() {
     setAppliedVoucher(null);
     setVoucherInput('');
     setVoucherError('');
+    setServerQuoteState(null);
+    lastQuotedKeyRef.current = null;
   }
 
   function handleTogglePoints(checked: boolean) {
@@ -363,6 +496,7 @@ export default function Storefront({
       setAuthOpen(true);
       return;
     }
+    void refetchProfile();
     setHistoryLoading(true);
     setHistoryError('');
     setHistoryRequest((request) => request + 1);
@@ -407,14 +541,7 @@ export default function Storefront({
           voucherCode?: string;
           pointsToUse?: number;
         } = {
-          items: items.map(({ product, quantity, options }) => {
-            const normalized = normalizeProductOptions(options);
-            return {
-              productId: product.id, quantity, size: normalized.size,
-              toppingIds: normalized.toppings.map(({ id }) => id),
-              sweetness: normalized.sweetness, ice: normalized.ice, note: normalized.note,
-            };
-          }),
+          items: buildOrderItemsPayload(items),
         };
         if (appliedVoucher) {
           orderPayload.voucherCode = appliedVoucher;
@@ -511,6 +638,10 @@ export default function Storefront({
         consumeItems(items);
         setAppliedVoucher(null);
         setVoucherInput('');
+        setVoucherError('');
+        setServerQuoteState(null);
+        setQuoteErrorState(null);
+        lastQuotedKeyRef.current = null;
         setUsePoints(false);
         setPointsToUse(0);
         notifyProfileUpdate();
@@ -658,7 +789,7 @@ export default function Storefront({
                   <Award size={24} />
                 </div>
                 <h3>Tích điểm BrewLite Rewards</h3>
-                <p>Tích lũy <strong>1 điểm cho mỗi 10.000đ</strong> thanh toán. Đổi <strong>1 điểm = 1.000đ</strong> trừ trực tiếp vào đơn hàng kế tiếp!</p>
+                <p>Tích lũy <strong>1 điểm cho mỗi 10.000đ</strong> thanh toán. Điểm chờ được mở khóa khi quán bắt đầu pha chế. Đổi <strong>1 điểm khả dụng = 1.000đ</strong> cho đơn hàng tiếp theo.</p>
                 <div className="promo-loyalty-highlight">
                   <div className="promo-loyalty-stat">
                     <strong>10.000đ</strong>
@@ -670,8 +801,13 @@ export default function Storefront({
                     <span>Giảm / 1 điểm</span>
                   </div>
                 </div>
+                <LoyaltyPolicyTable
+                  samplePoints={5}
+                  caption="Ví dụ đơn 50.000đ (+5 điểm):"
+                  compact
+                />
                 <div className="promo-card__footer">
-                  <small>Tự động tích lũy vào tài khoản ngay khi hoàn tất đơn</small>
+                  <small>Mở khóa tự động khi bắt đầu pha chế · Hủy trước pha chế sẽ thu hồi điểm chờ</small>
                 </div>
               </div>
             </article>
@@ -847,8 +983,8 @@ export default function Storefront({
                 <button
                   type="button"
                   className={`checkout-promo-chip ${appliedVoucher === 'GIAM10' ? 'is-applied' : ''}`}
-                  onClick={() => applyVoucher('GIAM10')}
-                  disabled={checkoutBusy}
+                  onClick={() => void applyVoucher('GIAM10')}
+                  disabled={checkoutBusy || voucherBusy}
                 >
                   <strong>GIAM10</strong> · Giảm 10% (tối đa 50k)
                 </button>
@@ -857,13 +993,18 @@ export default function Storefront({
                 <div className="checkout-voucher-applied">
                   <div className="checkout-voucher-applied__info">
                     <Check size={16} className="checkout-voucher-applied__icon" />
-                    <span>Mã ưu đãi <strong>{appliedVoucher}</strong> đã được áp dụng</span>
+                    <span>
+                      Mã ưu đãi <strong>{appliedVoucher}</strong> đã được áp dụng
+                      {activeQuote?.voucher
+                        ? ` (giảm ${activeQuote.voucher.discountPct}%, tối đa ${currency(activeQuote.voucher.maxDiscount)})`
+                        : ''}
+                    </span>
                   </div>
                   <button
                     type="button"
                     className="checkout-voucher-remove"
                     onClick={removeVoucher}
-                    disabled={checkoutBusy}
+                    disabled={checkoutBusy || voucherBusy}
                     title="Bỏ áp dụng mã này"
                   >
                     Bỏ chọn
@@ -880,19 +1021,19 @@ export default function Storefront({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        applyVoucher();
+                        void applyVoucher();
                       }
                     }}
-                    disabled={checkoutBusy}
+                    disabled={checkoutBusy || voucherBusy}
                     aria-label="Mã giảm giá"
                   />
                   <button
                     className="button button-outline checkout-apply-btn"
                     type="button"
-                    onClick={() => applyVoucher()}
-                    disabled={checkoutBusy || !voucherInput.trim()}
+                    onClick={() => void applyVoucher()}
+                    disabled={checkoutBusy || voucherBusy || !voucherInput.trim()}
                   >
-                    Áp dụng
+                    {voucherBusy ? 'Đang kiểm...' : 'Áp dụng'}
                   </button>
                 </div>
               )}
@@ -920,11 +1061,12 @@ export default function Storefront({
               ) : (
                 <div className="checkout-loyalty-body">
                   <div className="checkout-loyalty-balance">
-                    <span>Số điểm hiện có:</span>
+                    <span>Tổng điểm tích lũy:</span>
                     <strong>{rewardPoints.toLocaleString('vi-VN')} điểm</strong>
-                    <small>({currency(rewardPoints * 1000)})</small>
+                    <small>{availableRewardPoints.toLocaleString('vi-VN')} điểm khả dụng · {pendingRewardPoints.toLocaleString('vi-VN')} điểm chờ</small>
                   </div>
-                  {rewardPoints > 0 ? (
+                  <p className="checkout-loyalty-note">Điểm chờ được mở khóa khi quán bắt đầu pha chế. Hủy trước đó sẽ thu hồi điểm chờ.</p>
+                  {availableRewardPoints > 0 ? (
                     <div className="checkout-loyalty-action">
                       <label className="checkout-checkbox-label">
                         <input
@@ -972,17 +1114,33 @@ export default function Storefront({
                     </div>
                   ) : (
                     <p className="checkout-loyalty-note">
-                      Bạn chưa có điểm thưởng. Sau khi hoàn tất đơn này, bạn sẽ nhận được <strong>+{earnedPoints} điểm</strong>!
+                      Chưa có điểm khả dụng. Điểm được cộng khi thanh toán và mở khóa khi quán bắt đầu pha chế.
                     </p>
                   )}
+                  <LoyaltyPolicyTable
+                    samplePoints={earnedPoints > 0 ? earnedPoints : 5}
+                    caption={earnedPoints > 0
+                      ? `Minh họa trên đơn này (+${earnedPoints} điểm):`
+                      : 'Ví dụ minh họa đơn 50.000đ (+5 điểm):'}
+                    compact
+                  />
                 </div>
               )}
             </div>
 
             <div className="checkout-secure">⌑ <span>Thông tin thanh toán được bảo vệ an toàn.</span></div>
-            {checkoutError && <p className="form-error" role="alert">{checkoutError}</p>}
-            <button className="button button-primary button-full pay-button" disabled={checkoutBusy || items.length === 0} onClick={pay} type="button">
-              {checkoutBusy ? 'Đang xử lý...' : `Xác nhận & thanh toán · ${currency(total)}`}
+            {(checkoutError || quoteError) && <p className="form-error" role="alert">{checkoutError || quoteError}</p>}
+            <button
+              className="button button-primary button-full pay-button"
+              disabled={checkoutBusy || voucherBusy || quoteBusy || Boolean(quoteError) || items.length === 0}
+              onClick={pay}
+              type="button"
+            >
+              {checkoutBusy
+                ? 'Đang xử lý...'
+                : voucherBusy || quoteBusy
+                  ? 'Đang kiểm tra báo giá...'
+                  : `Xác nhận & thanh toán · ${currency(total)}`}
             </button>
             <p className="terms-copy">Bằng việc tiếp tục, bạn đồng ý với điều khoản sử dụng của BrewLite.</p>
           </div>
@@ -1028,7 +1186,7 @@ export default function Storefront({
             {token && earnedPoints > 0 && (
               <div className="summary-reward-note">
                 <Award size={14} />
-                <span>Nhận ngay <strong>+{earnedPoints} điểm</strong> khi đơn hoàn thành</span>
+                <span>Nhận <strong>+{earnedPoints} điểm chờ</strong> khi thanh toán; mở khóa khi bắt đầu pha chế</span>
               </div>
             )}
           </aside>
@@ -1059,7 +1217,20 @@ export default function Storefront({
               <div><span>Tổng thanh toán</span><strong>{currency(receipt.total)}</strong></div>
             )}
             {typeof receipt.total === 'number' && Math.floor(receipt.total / 10000) > 0 && (
-              <div><span>Điểm thưởng nhận được</span><strong className="summary-points-earned">+{Math.floor(receipt.total / 10000)} điểm</strong></div>
+              <div>
+                <span>
+                  {receipt.status === 'CANCELLED'
+                    ? 'Điểm chờ đã thu hồi'
+                    : receipt.status === 'PAID'
+                      ? 'Điểm chờ của đơn (mở khóa lúc pha chế)'
+                      : ['PREPARING', 'READY', 'COMPLETED'].includes(receipt.status)
+                        ? 'Điểm thưởng đã mở khóa'
+                        : 'Điểm dự kiến khi thanh toán'}
+                </span>
+                <strong className="summary-points-earned">
+                  {receipt.status === 'CANCELLED' ? '-' : '+'}{Math.floor(receipt.total / 10000)} điểm
+                </strong>
+              </div>
             )}
           </div>
 
@@ -1073,6 +1244,9 @@ export default function Storefront({
               >
                 {cancellingOrderId === receipt.id ? 'Đang xử lý hủy...' : 'Hủy đơn hàng này'}
               </button>
+              {receipt.status === 'PAID' && (
+                <p className="confirmation-cancel-note">Hủy lúc này sẽ ghi nhận hoàn tiền mô phỏng và thu hồi điểm chờ của đơn.</p>
+              )}
             </div>
           )}
 
@@ -1105,6 +1279,9 @@ export default function Storefront({
               <button className="button button-outline" onClick={() => setView('menu')} type="button">← Về thực đơn</button>
             </header>
 
+            <div className="history-alert is-success" role="status">
+              {availableRewardPoints.toLocaleString('vi-VN')} điểm khả dụng · {pendingRewardPoints.toLocaleString('vi-VN')} điểm chờ · Tổng {rewardPoints.toLocaleString('vi-VN')} điểm. Điểm được cộng khi thanh toán, mở khóa khi bắt đầu pha chế và thu hồi nếu hủy trước đó.
+            </div>
             {cancelMessage && (
               <div className={`history-alert is-${cancelMessage.type}`}>
                 <span>{cancelMessage.text}</span>
@@ -1117,7 +1294,14 @@ export default function Storefront({
                 <div className="history-stats">
                   <article className="history-stat"><span className="history-stat__icon"><ClipboardList size={20} /></span><div><span>Tổng đơn hàng</span><strong>{history.length}</strong></div></article>
                   <article className="history-stat"><span className="history-stat__icon"><WalletCards size={20} /></span><div><span>Đã chi tiêu</span><strong>{currency(successfulSpend(history))}</strong></div></article>
-                  <article className="history-stat"><span className="history-stat__icon"><Award size={20} /></span><div><span>Điểm tích lũy</span><strong>{rewardPoints.toLocaleString('vi-VN')} điểm</strong></div></article>
+                  <article className="history-stat">
+                    <span className="history-stat__icon"><Award size={20} /></span>
+                    <div>
+                      <span>Điểm khả dụng / Tổng</span>
+                      <strong>{availableRewardPoints.toLocaleString('vi-VN')} / {rewardPoints.toLocaleString('vi-VN')} điểm</strong>
+                      <small className="history-stat__sub">{pendingRewardPoints.toLocaleString('vi-VN')} điểm đang chờ pha chế</small>
+                    </div>
+                  </article>
                 </div>
 
                 <div className="history-toolbar">
@@ -1140,6 +1324,7 @@ export default function Storefront({
                       const orderKey = String(order.id);
                       const isExpanded = expandedOrders === null || expandedOrders.has(orderKey);
                       const paymentMethod = primaryPayment(order.payment)?.method;
+                      const orderPoints = order.rewardPointsEarned ?? 0;
                       return (
                         <article className={`history-order${isExpanded ? ' is-expanded' : ''}`} key={order.id}>
                           <button
@@ -1198,6 +1383,18 @@ export default function Storefront({
                               </div>
                               <div className="history-order__total">
                                 <div><span>Tạm tính</span><strong>{currency(order.total)}</strong></div>
+                                {orderPoints > 0 && (
+                                  <div className="history-order__points">
+                                    <span>
+                                      {order.status === 'CANCELLED'
+                                        ? 'Điểm chờ đã thu hồi'
+                                        : order.status === 'PAID'
+                                          ? 'Điểm chờ mở khóa'
+                                          : 'Điểm thưởng (đã mở khóa)'}
+                                    </span>
+                                    <strong>{order.status === 'CANCELLED' ? `-${orderPoints}` : `+${orderPoints}`} điểm</strong>
+                                  </div>
+                                )}
                                 <div className="history-order__grand-total"><span>Tổng thanh toán · nhận tại quầy</span><strong>{currency(order.total)}</strong></div>
                                 <div className="history-order__actions-row">
                                   {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
@@ -1232,6 +1429,7 @@ export default function Storefront({
         <ProductDetailModal
           key={selectedProduct.id}
           product={selectedProduct}
+          inCartQuantity={getProductQuantityInCart(items, selectedProduct.id)}
           toppings={toppings}
           toppingsLoading={toppingsLoading}
           toppingsError={toppingsError}

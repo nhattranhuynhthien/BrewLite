@@ -72,7 +72,7 @@ export class AuthService {
   async getProfile(userId: number) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, email: true, rewardPoints: true, createdAt: true },
+      select: { id: true, name: true, email: true, rewardPoints: true, pendingRewardPoints: true, createdAt: true },
     });
     if (!user) throw new UnauthorizedException('Tài khoản không còn tồn tại');
     return user;

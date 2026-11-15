@@ -7,6 +7,16 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 describe('OrdersService', () => {
   let service: OrdersService;
   const prisma = {
+    product: {
+      findMany: jest.fn(),
+    },
+    topping: {
+      findMany: jest.fn(),
+    },
+    promotion: {
+      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+    },
     order: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
@@ -107,5 +117,74 @@ describe('OrdersService', () => {
     prisma.order.findFirst.mockResolvedValue(null);
 
     await expect(service.findForUser(7, 12)).rejects.toThrow('Không tìm thấy đơn hàng 7');
+  });
+
+  it('quotes non-GIAM10 voucher discounts and caps points from server data', async () => {
+    prisma.product.findMany.mockResolvedValue([
+      { id: 1, name: 'Cà phê sữa', price: 35001, stock: 5, isAvailable: true },
+    ]);
+    prisma.topping.findMany.mockResolvedValue([{ id: 3, name: 'Thạch', price: 5000 }]);
+    prisma.promotion.findUnique.mockResolvedValue(null);
+    prisma.promotion.findFirst.mockResolvedValue({
+      id: 9,
+      code: 'VIP20',
+      discountPct: 20,
+      maxDiscount: 50000,
+      usageLimit: 4,
+    });
+
+    const result = await service.quote({
+      items: [{ productId: 1, quantity: 2, size: 'M', toppingIds: [3] }],
+      voucherCode: 'vip20',
+      pointsToUse: 500,
+    });
+
+    // (35001 + 5000 + 5000) * 2 = 90002; 20% = round(18000.4) = 18000; after voucher = 72002; max points = 72
+    expect(result).toEqual({
+      subtotal: 90002,
+      voucherCode: 'VIP20',
+      voucherDiscount: 18000,
+      voucher: { code: 'VIP20', discountPct: 20, maxDiscount: 50000 },
+      totalAfterVoucher: 72002,
+      pointsToUse: 72,
+      pointsDiscount: 72000,
+      total: 2,
+      earnedPoints: 0,
+    });
+  });
+
+  it('rejects quote when cumulative quantity across variants exceeds product stock', async () => {
+    prisma.product.findMany.mockResolvedValue([
+      { id: 1, name: 'Trà đào', price: 45000, stock: 2, isAvailable: true },
+    ]);
+
+    await expect(
+      service.quote({
+        items: [
+          { productId: 1, quantity: 1, size: 'M' },
+          { productId: 1, quantity: 2, size: 'L' },
+        ],
+      }),
+    ).rejects.toThrow('Chỉ còn lại 2 sản phẩm');
+  });
+
+  it('rejects quote when voucher is missing or exhausted', async () => {
+    prisma.product.findMany.mockResolvedValue([
+      { id: 1, name: 'Trà đào', price: 45000, stock: 5, isAvailable: true },
+    ]);
+    prisma.promotion.findUnique.mockResolvedValue({
+      id: 1,
+      code: 'HETLUOT',
+      discountPct: 10,
+      maxDiscount: 50000,
+      usageLimit: 0,
+    });
+
+    await expect(
+      service.quote({
+        items: [{ productId: 1, quantity: 1 }],
+        voucherCode: 'HETLUOT',
+      }),
+    ).rejects.toThrow('Mã giảm giá không hợp lệ hoặc đã hết hạn!');
   });
 });

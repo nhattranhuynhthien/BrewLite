@@ -91,3 +91,69 @@ test('a delayed 401 cannot sign out the account selected after the request start
     global.fetch = originalFetch;
   }
 });
+
+test('cart store enforces total stock limit across repeated adds and multiple variants', () => {
+  const { useCartStore, getProductQuantityInCart, getRemainingProductStock } = load('store/cart-store.ts');
+  const limited = { id: 10, name: 'Matcha', price: 45000, stock: 3, imageUrl: null };
+  useCartStore.getState().clearCart();
+
+  useCartStore.getState().addItem(limited, 2, { size: 'M', toppings: [], sweetness: 'Bình thường', ice: 'Bình thường', note: '' });
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 2);
+  assert.equal(getRemainingProductStock(useCartStore.getState().items, limited), 1);
+
+  // Adding a second variant requests 2, but store caps total across all variants to stock (3).
+  useCartStore.getState().addItem(limited, 2, { size: 'L', toppings: [], sweetness: 'Ít đường', ice: 'Bình thường', note: '' });
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 3);
+  assert.equal(getRemainingProductStock(useCartStore.getState().items, limited), 0);
+
+  // Adding again does nothing once stock is exhausted.
+  useCartStore.getState().addItem(limited, 1, { size: 'M', toppings: [], sweetness: 'Bình thường', ice: 'Bình thường', note: '' });
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 3);
+
+  // setQuantity cannot increase one variant above remaining stock considering the other variant.
+  const { getCartItemKey } = load('lib/product-options.ts');
+  const mKey = getCartItemKey(10, { size: 'M', toppings: [], sweetness: 'Bình thường', ice: 'Bình thường', note: '' });
+  useCartStore.getState().setQuantity(mKey, 5);
+  assert.equal(getProductQuantityInCart(useCartStore.getState().items, 10), 3);
+});
+
+test('order quote fetches server voucher discount and rejects invalid/exhausted codes', async () => {
+  const quoteLib = load('lib/order-quote.ts');
+  const originalFetch = global.fetch;
+  const product = { id: 5, name: 'Cold Brew', price: 50000, stock: 10, imageUrl: null };
+  const cart = [{ product, quantity: 2 }];
+
+  try {
+    global.fetch = async (url, init) => {
+      assert.match(String(url), /\/orders\/quote$/);
+      const sent = JSON.parse(init.body);
+      if (sent.voucherCode === 'VIP25') {
+        return new Response(JSON.stringify({
+          subtotal: 100000,
+          voucherCode: 'VIP25',
+          voucherDiscount: 25000,
+          voucher: { code: 'VIP25', discountPct: 25, maxDiscount: 40000 },
+          totalAfterVoucher: 75000,
+          pointsToUse: 0,
+          pointsDiscount: 0,
+          total: 75000,
+          earnedPoints: 7,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ message: 'Mã giảm giá không hợp lệ hoặc đã hết hạn!' }), {
+        status: 400, headers: { 'content-type': 'application/json' },
+      });
+    };
+
+    const valid = await quoteLib.fetchOrderQuote({ items: cart, voucherCode: 'VIP25' });
+    assert.equal(valid.voucherDiscount, 25000);
+    assert.equal(valid.total, 75000);
+
+    await assert.rejects(
+      quoteLib.fetchOrderQuote({ items: cart, voucherCode: 'EXPIRED' }),
+      err => err.status === 400 && /không hợp lệ|hết hạn/.test(err.message),
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

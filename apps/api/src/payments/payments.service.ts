@@ -202,7 +202,7 @@ export class PaymentsService {
       assertTransition(expectedStatus, orderStatus);
       const orderTransition = await tx.order.updateMany({
         where: { id: orderId, status: expectedStatus },
-        data: { status: orderStatus, paymentAttemptKey: success ? idempotencyKey : null },
+        data: { status: orderStatus, paymentAttemptKey: success ? idempotencyKey : null, rewardPointsEarned: pointsToAdd },
       });
       if (orderTransition.count !== 1) {
         throw new ConflictException(
@@ -222,7 +222,7 @@ export class PaymentsService {
       if (success) {
         await tx.user.update({
           where: { id: order.userId },
-          data: { rewardPoints: { increment: pointsToAdd } },
+          data: { rewardPoints: { increment: pointsToAdd }, pendingRewardPoints: { increment: pointsToAdd } },
         });
       }
 
