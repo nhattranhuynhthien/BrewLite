@@ -33,9 +33,10 @@ import {
   getConfiguredUnitPrice,
   normalizeProductOptions,
 } from '@/lib/product-options';
-import { getProductQuantityInCart, useCartStore } from '@/store/cart-store';
+import { getProductQuantityInCart, useCartStore, type CartItem } from '@/store/cart-store';
 import { useToppings } from '@/hooks/useToppings';
-import { checkoutStorageKey, loadCheckoutAttempt, saveCheckoutAttempt, getActiveCheckout, saveActiveCheckout, finishCheckout, withCheckoutLock } from '@/lib/checkout-attempt';
+import { checkoutStorageKey, clearLinkedCheckoutForOrder, finishCheckout, finishOrderPaymentAttempt, getActiveCheckout, loadCheckoutAttempt, loadOrderPaymentAttempt, saveActiveCheckout, withCheckoutLock } from '@/lib/checkout-attempt';
+import { submitOrderPayment, type OrderPaymentMethod } from '@/lib/order-payment';
 import { buildOrderItemsPayload, fetchOrderQuote, type OrderQuote } from '@/lib/order-quote';
 import { matchesOrderCode, orderCode, paymentLabel, primaryPayment, successfulSpend, type HistoryPayment } from '@/lib/order-history';
 import type { Product } from '@/types/product';
@@ -186,6 +187,7 @@ export default function Storefront({
   const items = useCartStore((state) => state.items);
   const addItem = useCartStore((state) => state.addItem);
   const consumeItems = useCartStore((state) => state.consumeItems);
+  const syncCatalog = useCartStore((state) => state.syncCatalog);
   const token = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -232,9 +234,24 @@ export default function Storefront({
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<number | string | null>(null);
   const [cancelMessage, setCancelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [payingOrderId, setPayingOrderId] = useState<number | string | null>(null);
+  const [historyPayMethod, setHistoryPayMethod] = useState<OrderPaymentMethod>('WALLET');
+  const [historyPayBusyOrderId, setHistoryPayBusyOrderId] = useState<number | string | null>(null);
+  const [historyPayError, setHistoryPayError] = useState('');
   const checkoutInFlight = useRef(false);
   const quoteSeqRef = useRef(0);
   const lastQuotedKeyRef = useRef<string | null>(null);
+
+  async function refreshProducts() {
+    try {
+      const data = await apiFetch<Product[]>('/products');
+      setProducts(data);
+      await useCartStore.persist.rehydrate();
+      syncCatalog(data);
+    } catch {
+      // Best-effort stock refresh after checkout, cancel, or conflict.
+    }
+  }
 
   function handleCopyVoucher(code: string) {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -250,10 +267,16 @@ export default function Storefront({
     setCancelMessage(null);
     try {
       await apiFetch(`/orders/${orderId}/cancel`, { method: 'PATCH' });
+      clearLinkedCheckoutForOrder(token, orderId);
+      if (payingOrderId !== null && String(payingOrderId) === String(orderId)) {
+        setPayingOrderId(null);
+        setHistoryPayError('');
+      }
       setCancelMessage({ type: 'success', text: `Đã hủy thành công đơn hàng #${orderId}.` });
       setHistoryRequest((r) => r + 1);
       notifyProfileUpdate();
       void refetchProfile();
+      void refreshProducts();
       if (receipt && String(receipt.id) === String(orderId)) {
         setReceipt((prev) => prev ? { ...prev, status: 'CANCELLED' } : null);
       }
@@ -264,6 +287,110 @@ export default function Storefront({
       });
     } finally {
       setCancellingOrderId(null);
+    }
+  }
+
+  function openHistoryPayment(order: Order) {
+    setPayingOrderId(order.id);
+    setHistoryPayError('');
+    setCancelMessage(null);
+    const fallbackMethod = primaryPayment(order.payment)?.method;
+    let preferred: OrderPaymentMethod =
+      fallbackMethod === 'CREDIT_CARD' || fallbackMethod === 'MOMO' ? fallbackMethod : 'WALLET';
+    if (token && order.status === 'PENDING') {
+      try {
+        const { attempt } = loadOrderPaymentAttempt(token, order.id, order.status);
+        if (
+          attempt.paymentMethod === 'WALLET' ||
+          attempt.paymentMethod === 'CREDIT_CARD' ||
+          attempt.paymentMethod === 'MOMO'
+        ) {
+          preferred = attempt.paymentMethod;
+        }
+      } catch {
+        // Ignore corrupt saved attempt while opening panel; submit will surface error if needed.
+      }
+    }
+    setHistoryPayMethod(preferred);
+  }
+
+  async function payHistoryOrder(order: Order) {
+    if (historyPayBusyOrderId !== null) return;
+    if (!token) {
+      setAuthMode('login');
+      setAuthOpen(true);
+      return;
+    }
+
+    setHistoryPayBusyOrderId(order.id);
+    setHistoryPayError('');
+    setCancelMessage(null);
+    try {
+      await withCheckoutLock(token, async () => {
+        const authorization = { Authorization: `Bearer ${token}` };
+        const latestOrder = await apiFetch<Order>(`/orders/${order.id}`, { headers: authorization });
+        if (!['PENDING', 'PAYMENT_FAILED'].includes(latestOrder.status)) {
+          clearLinkedCheckoutForOrder(token, latestOrder.id);
+          setPayingOrderId(null);
+          setHistoryRequest((r) => r + 1);
+          setCancelMessage({
+            type: latestOrder.status === 'PAID' ? 'success' : 'error',
+            text: latestOrder.status === 'CANCELLED'
+              ? `Đơn ${orderCode(latestOrder.id)} đã bị hủy trước đó.`
+              : `Đơn ${orderCode(latestOrder.id)} hiện đang ở trạng thái ${statuses[latestOrder.status] ?? latestOrder.status}.`,
+          });
+          return;
+        }
+
+        const { storageKey, attempt, linkedCheckoutKey } = loadOrderPaymentAttempt(
+          token,
+          latestOrder.id,
+          latestOrder.status,
+        );
+        const { resolvedStatus } = await submitOrderPayment({
+          token,
+          storageKey,
+          attempt,
+          orderId: latestOrder.id,
+          amount: latestOrder.total,
+          method: historyPayMethod,
+          orderStatus: latestOrder.status,
+        });
+
+        await useCartStore.persist.rehydrate();
+        if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
+          throw new Error('Tài khoản đã thay đổi. Vui lòng kiểm tra đơn với tài khoản đã thanh toán.');
+        }
+
+        if (linkedCheckoutKey) {
+          const active = getActiveCheckout(token);
+          if (active?.orderId === Number(latestOrder.id) && Array.isArray(active.cartSnapshot)) {
+            consumeItems(active.cartSnapshot as CartItem[]);
+            lastQuotedKeyRef.current = null;
+          }
+        }
+        finishOrderPaymentAttempt(token, storageKey, latestOrder.id, linkedCheckoutKey);
+        setPayingOrderId(null);
+        setCancelMessage({
+          type: 'success',
+          text: `Đã thanh toán thành công đơn hàng ${orderCode(latestOrder.id)}.`,
+        });
+        if (receipt && String(receipt.id) === String(latestOrder.id)) {
+          setReceipt({ id: latestOrder.id, total: latestOrder.total, status: resolvedStatus });
+        }
+        setHistoryRequest((r) => r + 1);
+        notifyProfileUpdate();
+        void refetchProfile();
+        void refreshProducts();
+      });
+    } catch (error) {
+      setHistoryPayError(error instanceof Error ? error.message : 'Không thể hoàn tất thanh toán.');
+      if (error instanceof ApiError && error.status === 401) {
+        setAuthMode('login');
+        setAuthOpen(true);
+      }
+    } finally {
+      setHistoryPayBusyOrderId(null);
     }
   }
 
@@ -293,13 +420,18 @@ export default function Storefront({
   useEffect(() => {
     let active = true;
     apiFetch<Product[]>('/products')
-      .then((data) => { if (active) setProducts(data); })
+      .then(async (data) => {
+        if (!active) return;
+        setProducts(data);
+        await useCartStore.persist.rehydrate();
+        if (active) syncCatalog(data);
+      })
       .catch((error: unknown) => {
         if (active) setProductsError(error instanceof Error ? error.message : 'Không thể tải thực đơn.');
       })
       .finally(() => { if (active) setProductsLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [syncCatalog]);
 
   useEffect(() => {
     if (view !== 'orders') return;
@@ -497,6 +629,8 @@ export default function Storefront({
       return;
     }
     void refetchProfile();
+    setPayingOrderId(null);
+    setHistoryPayError('');
     setHistoryLoading(true);
     setHistoryError('');
     setHistoryRequest((request) => request + 1);
@@ -578,7 +712,7 @@ export default function Storefront({
         if (attempt.paymentMethod && attempt.paymentMethod !== method) {
           throw new Error('Lần thanh toán trước chưa rõ kết quả. Vui lòng chọn lại phương thức trước đó để kiểm tra, hoặc xem lịch sử đơn.');
         }
-        saveActiveCheckout(token, { storageKey, body });
+        saveActiveCheckout(token, { storageKey, body, cartSnapshot: items });
         let created: { orderId: number; order: { total: number } };
         try {
           created = await apiFetch('/orders', {
@@ -586,6 +720,7 @@ export default function Storefront({
           });
         } catch (error) {
           if (error instanceof ApiError && [400, 404].includes(error.status)) finishCheckout(token, storageKey);
+          if (error instanceof ApiError && [400, 404, 409].includes(error.status)) void refreshProducts();
           throw error;
         }
         const orderId = created.orderId;
@@ -593,39 +728,21 @@ export default function Storefront({
         if (!Number.isInteger(orderId) || !Number.isFinite(amount) || amount < 0) {
           throw new Error('API tạo đơn không trả về mã đơn hoặc tổng tiền hợp lệ.');
         }
-        saveActiveCheckout(token, { storageKey, body, orderId });
+        saveActiveCheckout(token, { storageKey, body, orderId, cartSnapshot: items });
         const currentOrder = await apiFetch<Order>(`/orders/${orderId}`, { headers: authorization });
         if (currentOrder.status === 'CANCELLED') {
           finishCheckout(token, storageKey);
           throw new Error('Đơn trước đã hủy. Vui lòng bấm thanh toán lại để tạo đơn mới.');
         }
-        attempt.paymentMethod = method;
-        saveCheckoutAttempt(storageKey, attempt);
-        const payment = await apiFetch<{
-          status?: string;
-          message?: string;
-          orderStatus?: string;
-          payment?: { status?: string };
-          order?: { status?: string };
-        }>('/payments', {
-          method: 'POST',
-          headers: { ...authorization, 'Idempotency-Key': attempt.paymentKey },
-          body: JSON.stringify({ orderId, method, amount }),
+        const { resolvedStatus } = await submitOrderPayment({
+          token,
+          storageKey,
+          attempt,
+          orderId,
+          amount,
+          method,
+          orderStatus: currentOrder.status,
         });
-        const paymentStatus = payment?.orderStatus ?? payment?.payment?.status ?? payment?.status ?? payment?.order?.status;
-        if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
-        if (paymentStatus === 'PAYMENT_FAILED' || paymentStatus === 'FAILED') {
-          attempt.paymentKey = crypto.randomUUID();
-          delete attempt.paymentMethod;
-          saveCheckoutAttempt(storageKey, attempt);
-          throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
-        }
-        if (paymentStatus !== 'PAID' && paymentStatus !== 'SUCCESS') {
-          throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${paymentStatus}).`);
-        }
-        if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
-          throw new Error('Tài khoản đã thay đổi. Đơn đã thanh toán thuộc tài khoản trước; giỏ hiện tại được giữ nguyên.');
-        }
         await useCartStore.persist.rehydrate();
         if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
           throw new Error('Tài khoản đã thay đổi. Vui lòng kiểm tra đơn với tài khoản đã thanh toán.');
@@ -633,7 +750,7 @@ export default function Storefront({
         setReceipt({
           id: orderId,
           total: amount,
-          status: payment.order?.status ?? payment.orderStatus ?? paymentStatus ?? 'PAID',
+          status: resolvedStatus,
         });
         consumeItems(items);
         setAppliedVoucher(null);
@@ -646,6 +763,7 @@ export default function Storefront({
         setPointsToUse(0);
         notifyProfileUpdate();
         void refetchProfile();
+        void refreshProducts();
         finishCheckout(token, storageKey);
         setView('confirmation');
       });
@@ -1397,12 +1515,29 @@ export default function Storefront({
                                 )}
                                 <div className="history-order__grand-total"><span>Tổng thanh toán · nhận tại quầy</span><strong>{currency(order.total)}</strong></div>
                                 <div className="history-order__actions-row">
+                                  {['PENDING', 'PAYMENT_FAILED'].includes(order.status) && (
+                                    <button
+                                      type="button"
+                                      className="button button-primary history-order__pay-btn"
+                                      onClick={() => {
+                                        if (payingOrderId === order.id) {
+                                          setPayingOrderId(null);
+                                          setHistoryPayError('');
+                                        } else {
+                                          openHistoryPayment(order);
+                                        }
+                                      }}
+                                      disabled={cancellingOrderId === order.id || historyPayBusyOrderId === order.id}
+                                    >
+                                      {order.status === 'PAYMENT_FAILED' ? 'Thanh toán lại' : 'Thanh toán ngay'}
+                                    </button>
+                                  )}
                                   {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
                                     <button
                                       type="button"
                                       className="button button-outline history-order__cancel-btn"
                                       onClick={() => cancelOrder(order.id)}
-                                      disabled={cancellingOrderId === order.id}
+                                      disabled={cancellingOrderId === order.id || historyPayBusyOrderId === order.id}
                                     >
                                       {cancellingOrderId === order.id ? 'Đang hủy...' : 'Hủy đơn'}
                                     </button>
@@ -1410,6 +1545,60 @@ export default function Storefront({
                                   <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
                                 </div>
                               </div>
+                              {['PENDING', 'PAYMENT_FAILED'].includes(order.status) && payingOrderId === order.id && (
+                                <div className="history-order__pay-panel" role="region" aria-label={`Thanh toán đơn ${orderCode(order.id)}`}>
+                                  <div className="history-order__pay-head">
+                                    <strong>Hoàn tất thanh toán {orderCode(order.id)}</strong>
+                                    <p>
+                                      {order.status === 'PAYMENT_FAILED'
+                                        ? 'Thanh toán trước đó thất bại. Chọn phương thức để thử thanh toán lại hoặc bấm Hủy đơn.'
+                                        : 'Đơn đang chờ thanh toán (đã giữ hàng theo đơn). Chọn phương thức để thanh toán ngay hoặc bấm Hủy đơn để hoàn kho/voucher/điểm.'}
+                                    </p>
+                                  </div>
+                                  <div className="history-order__pay-methods">
+                                    {([
+                                      { value: 'WALLET', label: 'Ví điện tử' },
+                                      { value: 'CREDIT_CARD', label: 'Thẻ ngân hàng' },
+                                      { value: 'MOMO', label: 'Ví MoMo' },
+                                    ] as const).map((option) => (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        className={`history-pay-method${historyPayMethod === option.value ? ' is-selected' : ''}`}
+                                        onClick={() => setHistoryPayMethod(option.value)}
+                                        disabled={historyPayBusyOrderId === order.id}
+                                        aria-pressed={historyPayMethod === option.value}
+                                      >
+                                        {option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {historyPayError && <p className="history-order__pay-error" role="alert">{historyPayError}</p>}
+                                  <div className="history-order__pay-actions">
+                                    <button
+                                      type="button"
+                                      className="button button-primary history-order__pay-submit"
+                                      onClick={() => void payHistoryOrder(order)}
+                                      disabled={historyPayBusyOrderId === order.id}
+                                    >
+                                      {historyPayBusyOrderId === order.id
+                                        ? 'Đang thanh toán...'
+                                        : `Xác nhận thanh toán · ${currency(order.total)}`}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="button button-outline history-order__pay-close"
+                                      onClick={() => {
+                                        setPayingOrderId(null);
+                                        setHistoryPayError('');
+                                      }}
+                                      disabled={historyPayBusyOrderId === order.id}
+                                    >
+                                      Đóng
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </article>

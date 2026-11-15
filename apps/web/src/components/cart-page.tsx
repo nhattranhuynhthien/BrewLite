@@ -1,11 +1,14 @@
 'use client';
 
+import { useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeft, Award, ClipboardCheck, MapPin, Minus, Plus, ShieldCheck, ShoppingCart, Tag, Trash2 } from 'lucide-react';
 import SiteHeader from '@/layouts/SiteHeader';
 import { useCartPage } from '@/hooks/useCartPage';
-import { getProductQuantityInCart } from '@/store/cart-store';
+import { apiFetch } from '@/lib/api';
+import { getProductQuantityInCart, useCartStore } from '@/store/cart-store';
+import type { Product } from '@/types/product';
 import {
   getCartItemKey,
   getConfiguredUnitPrice,
@@ -25,6 +28,19 @@ export default function CartPage() {
     total,
     totalQuantity,
   } = useCartPage();
+  const syncCatalog = useCartStore((state) => state.syncCatalog);
+
+  useEffect(() => {
+    let active = true;
+    apiFetch<Product[]>('/products')
+      .then(async (products) => {
+        if (!active || !Array.isArray(products)) return;
+        await useCartStore.persist.rehydrate();
+        if (active) syncCatalog(products);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [syncCatalog]);
 
   return (
     <div className="cart-page">
