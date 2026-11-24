@@ -1,0 +1,2284 @@
+{
+  "info": {
+    "name": "BrewLite Develop API Tests",
+    "description": "Kiểm thử API BrewLite trên nhánh develop. Bộ test dùng database riêng, tự tạo khách hàng và đơn hàng, dùng JWT và Idempotency-Key theo từng lượt chạy.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "item": [
+    {
+      "name": "01 API và PostgreSQL",
+      "item": [
+        {
+          "name": "Swagger nhận diện nhánh develop (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "let spec;",
+                  "try { spec = pm.response.json(); } catch {}",
+                  "let ready = false;",
+                  "const routes = {\"/\":[\"get\"],\"/health\":[\"get\"],\"/health/ready\":[\"get\"],\"/auth/register\":[\"post\"],\"/auth/login\":[\"post\"],\"/auth/me\":[\"get\"],\"/users/me\":[\"get\",\"patch\"],\"/products\":[\"get\"],\"/products/{id}\":[\"get\"],\"/toppings\":[\"get\"],\"/orders/quote\":[\"post\"],\"/orders\":[\"post\"],\"/orders/me\":[\"get\"],\"/orders/{id}\":[\"get\"],\"/orders/{id}/cancel\":[\"patch\"],\"/orders/{id}/status\":[\"patch\"],\"/payments\":[\"post\"]};",
+                  "pm.test(\"Swagger cung cấp 18 phương thức của develop\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(spec?.info?.title, \"Kiểm tra baseUrl của develop\").to.equal(\"BrewLite API\");",
+                  "  for (const [path, methods] of Object.entries(routes)) {",
+                  "    pm.expect(spec.paths, path).to.have.property(path);",
+                  "    for (const method of methods) pm.expect(spec.paths[path], method+\" \"+path).to.have.property(method);",
+                  "  }",
+                  "  ready = true;",
+                  "});",
+                  "if (!ready) pm.execution.setNextRequest(null);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api-json"
+          },
+          "response": []
+        },
+        {
+          "name": "Trang gốc (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Phản hồi văn bản đúng với xử lý hiện tại\", function () {",
+                  "  pm.expect(pm.response.text()).to.equal(\"Hello World!\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/"
+          },
+          "response": []
+        },
+        {
+          "name": "Liveness (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"API trả trạng thái ok và thời điểm kiểm tra\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.equal(\"ok\");",
+                  "  pm.expect(Number.isNaN(Date.parse(body.timestamp))).to.equal(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness PostgreSQL (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"PostgreSQL đang hoạt động\", function () {",
+                  "  pm.expect(pm.response.json()).to.deep.include({status:\"ok\", database:\"up\"});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/ready"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 Xác thực và người dùng",
+      "item": [
+        {
+          "name": "Đăng ký khách hàng mới (201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const guid = () => pm.variables.replaceIn(\"{{$guid}}\");",
+                  "pm.collectionVariables.set(\"registrationEmail\", \"Develop-\" + guid() + \"@example.test\");",
+                  "for (const key of [\"orderKey\",\"paymentKey\",\"cancelOrderKey\"]) pm.collectionVariables.set(key,guid());",
+                  "for (const key of [\"registeredUserId\",\"accessToken\",\"operatorToken\",\"orderId\",\"cancelOrderId\",\"paymentId\"]) pm.collectionVariables.unset(key);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"Tài khoản trả ID số và chuẩn hóa tên, email\", function () {",
+                  "  const user = pm.response.json().user;",
+                  "  pm.expect(Number.isInteger(user.id) && user.id > 0).to.equal(true);",
+                  "  pm.expect(user).to.include({email:pm.variables.get(\"registrationEmail\").toLowerCase(), name:\"Postman Develop Customer\", rewardPoints:0});",
+                  "  pm.expect(user).to.not.have.property(\"password\");",
+                  "  pm.collectionVariables.set(\"registeredUserId\",String(user.id));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{registrationEmail}}\",\n  \"name\": \"  Postman Develop Customer  \",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đăng ký trùng email (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () {",
+                  "  pm.response.to.have.status(409);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(409);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "  pm.expect(JSON.stringify(body.message)).to.include(\"Email đã được sử dụng\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{registrationEmail}}\",\n  \"name\": \"  Postman Develop Customer  \",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đăng ký sai định dạng email (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "  pm.expect(JSON.stringify(body.message)).to.include(\"Email không hợp lệ\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"invalid\",\n  \"name\": \"  Postman Develop Customer  \",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đăng nhập sai mật khẩu (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(401);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{registrationEmail}}\",\n  \"password\": \"InvalidLocalPassword!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đăng nhập CUSTOMER (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"JWT và ID tài khoản khớp dữ liệu đăng ký\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.user.id).to.equal(Number(pm.variables.get(\"registeredUserId\")));",
+                  "  pm.expect(body.accessToken).to.match(/^[\\w-]+\\.[\\w-]+\\.[\\w-]+$/);",
+                  "  pm.collectionVariables.set(\"accessToken\",body.accessToken);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{registrationEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đăng nhập tài khoản vận hành (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"Lấy JWT của tài khoản vận hành đã được cấu hình\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.user.email).to.equal(pm.variables.get(\"operatorEmail\"));",
+                  "  pm.expect(body.accessToken).to.match(/^[\\w-]+\\.[\\w-]+\\.[\\w-]+$/);",
+                  "  pm.collectionVariables.set(\"operatorToken\",body.accessToken);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{operatorEmail}}\",\n  \"password\": \"{{operatorPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Hồ sơ qua Auth API (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Hồ sơ chính chủ và dữ liệu điểm hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.id).to.equal(Number(pm.variables.get(\"registeredUserId\")));",
+                  "  pm.expect(body.email).to.equal(pm.variables.get(\"registrationEmail\").toLowerCase());",
+                  "  pm.expect(body).to.not.have.property(\"password\");",
+                  "  pm.expect(body.rewardPoints).to.be.at.least(0);",
+                  "  pm.expect(body.pendingRewardPoints).to.be.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/auth/me"
+          },
+          "response": []
+        },
+        {
+          "name": "Hồ sơ thiếu JWT (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(401);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/auth/me"
+          },
+          "response": []
+        },
+        {
+          "name": "Hồ sơ qua Users API (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Hồ sơ chính chủ và dữ liệu điểm hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.id).to.equal(Number(pm.variables.get(\"registeredUserId\")));",
+                  "  pm.expect(body.email).to.equal(pm.variables.get(\"registrationEmail\").toLowerCase());",
+                  "  pm.expect(body).to.not.have.property(\"password\");",
+                  "  pm.expect(body.rewardPoints).to.be.at.least(0);",
+                  "  pm.expect(body.pendingRewardPoints).to.be.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/users/me"
+          },
+          "response": []
+        },
+        {
+          "name": "Đổi tên hiển thị (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Tên được trim và cập nhật đúng tài khoản\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.include({id:Number(pm.variables.get(\"registeredUserId\")), name:\"Postman Develop Updated\"});",
+                  "  pm.expect(body).to.not.have.property(\"password\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/users/me",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"  Postman Develop Updated  \"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Từ chối tên hiển thị trống (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/users/me",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"  \"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 Sản phẩm và topping",
+      "item": [
+        {
+          "name": "Menu và chọn sản phẩm kiểm thử (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Menu chỉ gồm sản phẩm khả dụng\", function () {",
+                  "  const products = pm.response.json();",
+                  "  pm.expect(products).to.be.an(\"array\").and.not.empty;",
+                  "  products.forEach(product => {",
+                  "    pm.expect(product.isAvailable).to.equal(true);",
+                  "    pm.expect(product.price).to.be.above(0);",
+                  "    pm.expect(product.imageUrl).to.be.a(\"string\");",
+                  "  });",
+                  "  const product = products.find(product => product.stock >= 3 && product.category);",
+                  "  pm.expect(product, \"Cần sản phẩm có ít nhất 3 món trong kho\").to.be.an(\"object\");",
+                  "  pm.collectionVariables.set(\"productId\",String(product.id));",
+                  "  pm.collectionVariables.set(\"productPrice\",String(product.price));",
+                  "  pm.collectionVariables.set(\"productCategory\",product.category);",
+                  "  pm.collectionVariables.set(\"categoryQuery\",encodeURIComponent(product.category));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products"
+          },
+          "response": []
+        },
+        {
+          "name": "Lọc sản phẩm theo danh mục (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Chỉ trả sản phẩm trong danh mục đã chọn\", function () {",
+                  "  const products = pm.response.json();",
+                  "  pm.expect(products.map(product=>product.id)).to.include(Number(pm.variables.get(\"productId\")));",
+                  "  products.forEach(product=>pm.expect(product.category).to.equal(pm.variables.get(\"productCategory\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products?category={{categoryQuery}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Chi tiết sản phẩm (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"ID, giá và danh mục khớp menu\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({id:Number(pm.variables.get(\"productId\")), price:Number(pm.variables.get(\"productPrice\")), category:pm.variables.get(\"productCategory\")});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products/{{productId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "ID sản phẩm sai định dạng (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products/invalid"
+          },
+          "response": []
+        },
+        {
+          "name": "Sản phẩm không tồn tại (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", function () {",
+                  "  pm.response.to.have.status(404);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(404);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/products/2147483647"
+          },
+          "response": []
+        },
+        {
+          "name": "Danh sách topping (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Chọn một topping từ dữ liệu seed\", function () {",
+                  "  const toppings = pm.response.json();",
+                  "  pm.expect(toppings).to.be.an(\"array\").and.not.empty;",
+                  "  const topping = toppings[0];",
+                  "  pm.expect(Number.isInteger(topping.id) && topping.id > 0).to.equal(true);",
+                  "  pm.expect(topping.price).to.be.at.least(0);",
+                  "  pm.collectionVariables.set(\"toppingId\",String(topping.id));",
+                  "  pm.collectionVariables.set(\"toppingPrice\",String(topping.price));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/toppings"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "04 Báo giá và đặt đơn",
+      "item": [
+        {
+          "name": "Báo giá size M và topping (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Tổng do server tính từ sản phẩm, size, topping\", function () {",
+                  "  const body = pm.response.json();",
+                  "  const subtotal = Number(pm.variables.get(\"productPrice\")) + 5000 + Number(pm.variables.get(\"toppingPrice\"));",
+                  "  pm.expect(body).to.include({subtotal, total:subtotal, voucherDiscount:0, pointsDiscount:0});",
+                  "  pm.expect(body.earnedPoints).to.equal(Math.floor(subtotal/10000));",
+                  "  pm.collectionVariables.set(\"quotedTotal\",String(body.total));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/quote",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Báo giá voucher từ seed (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Voucher giảm đúng 10% và áp dụng trần 50.000\", function () {",
+                  "  const body = pm.response.json();",
+                  "  const subtotal = Number(pm.variables.get(\"productPrice\")) + 5000 + Number(pm.variables.get(\"toppingPrice\"));",
+                  "  const discount = Math.round(Math.min(subtotal * 0.1, 50000));",
+                  "  pm.expect(body).to.include({subtotal, voucherCode:pm.variables.get(\"voucherCode\"), voucherDiscount:discount, total:subtotal-discount});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/quote",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ],\n  \"voucherCode\": \"{{voucherCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Voucher không hợp lệ (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "  pm.expect(JSON.stringify(body.message)).to.include(\"Mã giảm giá không hợp lệ\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/quote",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ],\n  \"voucherCode\": \"POSTMAN-INVALID-VOUCHER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Giỏ hàng rỗng (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "  pm.expect(JSON.stringify(body.message)).to.include(\"ít nhất một sản phẩm\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/quote",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Số lượng bằng 0 (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/quote",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 0,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Tạo đơn thiếu JWT (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(401);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Tạo đơn PENDING (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"Đơn PENDING khớp khách hàng và báo giá\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(Number.isInteger(body.orderId) && body.orderId > 0).to.equal(true);",
+                  "  pm.expect(body.order).to.include({id:body.orderId,userId:Number(pm.variables.get(\"registeredUserId\")),status:\"PENDING\",total:Number(pm.variables.get(\"quotedTotal\"))});",
+                  "  pm.expect(body.order.items).to.have.lengthOf(1);",
+                  "  pm.expect(body.order.items[0]).to.include({productId:Number(pm.variables.get(\"productId\")), quantity:1, size:\"M\"});",
+                  "  pm.collectionVariables.set(\"orderId\",String(body.orderId));",
+                  "  pm.collectionVariables.set(\"orderTotal\",String(body.order.total));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{orderKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Tạo lại đơn với cùng Idempotency-Key (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"API trả lại đúng đơn đã tạo\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.orderId).to.equal(Number(pm.variables.get(\"orderId\")));",
+                  "  pm.expect(body.order.total).to.equal(Number(pm.variables.get(\"orderTotal\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{orderKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Dùng lại key với giỏ hàng khác (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () {",
+                  "  pm.response.to.have.status(409);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(409);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "  pm.expect(JSON.stringify(body.message)).to.include(\"giỏ hàng khác\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{orderKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 2,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Lịch sử đơn chính chủ (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Lịch sử chứa một đơn của khách hàng\", function () {",
+                  "  const list = pm.response.json();",
+                  "  pm.expect(list.filter(order=>order.id === Number(pm.variables.get(\"orderId\")))).to.have.lengthOf(1);",
+                  "  list.forEach(order=>pm.expect(order.userId).to.equal(Number(pm.variables.get(\"registeredUserId\"))));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/me"
+          },
+          "response": []
+        },
+        {
+          "name": "Chi tiết đơn PENDING (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Chi tiết khớp đơn đã tạo\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({id:Number(pm.variables.get(\"orderId\")), status:\"PENDING\", total:Number(pm.variables.get(\"orderTotal\"))});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/{{orderId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "Đơn của người khác bị ẩn (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 404\", function () {",
+                  "  pm.response.to.have.status(404);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(404);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{operatorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/{{orderId}}"
+          },
+          "response": []
+        },
+        {
+          "name": "ID đơn sai định dạng (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/invalid"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "05 Thanh toán và điểm thưởng",
+      "item": [
+        {
+          "name": "Thanh toán thiếu Idempotency-Key (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "  pm.expect(JSON.stringify(body.message)).to.include(\"Thiếu Idempotency-Key\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": {{orderId}},\n  \"amount\": {{orderTotal}},\n  \"method\": \"WALLET\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Thanh toán thiếu tiền (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{paymentKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": {{orderId}},\n  \"amount\": 1,\n  \"method\": \"WALLET\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Thanh toán mock WALLET thành công (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"Đơn PAID và số điểm cộng theo tổng tiền\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.include({fromCache:false, status:\"PAID\", orderStatus:\"PAID\", orderId:Number(pm.variables.get(\"orderId\"))});",
+                  "  pm.expect(body.payment).to.include({orderId:Number(pm.variables.get(\"orderId\")), amount:Number(pm.variables.get(\"orderTotal\")), method:\"WALLET\"});",
+                  "  pm.expect(body.rewardPointsAdded).to.equal(Math.floor(Number(pm.variables.get(\"orderTotal\"))/10000));",
+                  "  pm.collectionVariables.set(\"paymentId\",String(body.payment.id));",
+                  "  pm.collectionVariables.set(\"rewardPointsAdded\",String(body.rewardPointsAdded));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{paymentKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": {{orderId}},\n  \"amount\": {{orderTotal}},\n  \"method\": \"WALLET\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Thanh toán lại với cùng key (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"Trả kết quả cache và giữ đúng ID thanh toán\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.fromCache).to.equal(true);",
+                  "  pm.expect(body.payment.id).to.equal(Number(pm.variables.get(\"paymentId\")));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{paymentKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": {{orderId}},\n  \"amount\": {{orderTotal}},\n  \"method\": \"WALLET\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Dùng lại key nhưng đổi phương thức (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 409\", function () {",
+                  "  pm.response.to.have.status(409);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(409);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{paymentKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/payments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": {{orderId}},\n  \"amount\": {{orderTotal}},\n  \"method\": \"CREDIT_CARD\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Điểm vừa cộng đang chờ xử lý đơn (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Điểm thưởng và điểm chờ chỉ cộng một lần\", function () {",
+                  "  const expected = Number(pm.variables.get(\"rewardPointsAdded\"));",
+                  "  pm.expect(pm.response.json()).to.include({rewardPoints:expected,pendingRewardPoints:expected});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/users/me"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "06 Xử lý và hủy đơn",
+      "item": [
+        {
+          "name": "CUSTOMER không có quyền vận hành (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 403\", function () {",
+                  "  pm.response.to.have.status(403);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(403);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/{{orderId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"PREPARING\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đơn PAID không thể bỏ qua PREPARING (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{operatorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/{{orderId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"READY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Vận hành PAID → PREPARING (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Đơn chuyển đúng sang PREPARING\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({id:Number(pm.variables.get(\"orderId\")),status:\"PREPARING\"});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{operatorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/{{orderId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"PREPARING\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Điểm chờ được mở khi pha chế (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Điểm thưởng giữ nguyên, điểm chờ về 0\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({rewardPoints:Number(pm.variables.get(\"rewardPointsAdded\")),pendingRewardPoints:0});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/users/me"
+          },
+          "response": []
+        },
+        {
+          "name": "Vận hành PREPARING → READY (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Đơn chuyển đúng sang READY\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({id:Number(pm.variables.get(\"orderId\")),status:\"READY\"});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{operatorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/{{orderId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"READY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Vận hành READY → COMPLETED (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Đơn chuyển đúng sang COMPLETED\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({id:Number(pm.variables.get(\"orderId\")),status:\"COMPLETED\"});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{operatorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders/{{orderId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"COMPLETED\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Đơn COMPLETED không thể hủy (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/{{orderId}}/cancel"
+          },
+          "response": []
+        },
+        {
+          "name": "Tạo đơn PENDING để hủy (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test(\"Đơn hủy là bản ghi mới và đang PENDING\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.order.status).to.equal(\"PENDING\");",
+                  "  pm.expect(body.orderId).to.not.equal(Number(pm.variables.get(\"orderId\")));",
+                  "  pm.collectionVariables.set(\"cancelOrderId\",String(body.orderId));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{cancelOrderKey}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{baseUrl}}/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": {{productId}},\n      \"quantity\": 1,\n      \"size\": \"M\",\n      \"toppingIds\": [\n        {{toppingId}}\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Hủy đơn PENDING (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Đơn của lượt chạy chuyển sang CANCELLED\", function () {",
+                  "  pm.expect(pm.response.json()).to.include({id:Number(pm.variables.get(\"cancelOrderId\")),status:\"CANCELLED\"});",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/{{cancelOrderId}}/cancel"
+          },
+          "response": []
+        },
+        {
+          "name": "Hủy lại đơn đã hủy (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Mã lỗi và thông báo trả về hợp lệ\", function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.statusCode).to.equal(400);",
+                  "  pm.expect(body.message).to.satisfy(message => typeof message === \"string\" || Array.isArray(message));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": "{{baseUrl}}/orders/{{cancelOrderId}}/cancel"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:4003",
+      "type": "string"
+    },
+    {
+      "key": "testPassword",
+      "value": "BrewLiteDevelop123!",
+      "type": "string"
+    },
+    {
+      "key": "operatorEmail",
+      "value": "postman-operator@example.test",
+      "type": "string"
+    },
+    {
+      "key": "operatorPassword",
+      "value": "BrewLiteDevelop123!",
+      "type": "string"
+    },
+    {
+      "key": "voucherCode",
+      "value": "GIAM10",
+      "type": "string"
+    },
+    {
+      "key": "registrationEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "registeredUserId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "operatorToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "productId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "productPrice",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "productCategory",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "categoryQuery",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "toppingId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "toppingPrice",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "cancelOrderKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "cancelOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "quotedTotal",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderTotal",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "rewardPointsAdded",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
