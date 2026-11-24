@@ -3,16 +3,23 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import Image from 'next/image';
 import {
+  ArrowRight,
   Award,
   CalendarDays,
   Check,
+  CheckCheck,
   ChevronDown,
   ClipboardList,
+  Clock,
   Coffee,
+  Copy,
   CreditCard,
   Gift,
+  Leaf,
   MapPin,
   Search,
+  ShieldCheck,
+  Sparkles,
   Tag,
   WalletCards,
 } from 'lucide-react';
@@ -26,9 +33,11 @@ import {
   getConfiguredUnitPrice,
   normalizeProductOptions,
 } from '@/lib/product-options';
-import { useCartStore } from '@/store/cart-store';
+import { getProductQuantityInCart, useCartStore, type CartItem } from '@/store/cart-store';
 import { useToppings } from '@/hooks/useToppings';
-import { checkoutStorageKey, loadCheckoutAttempt, saveCheckoutAttempt, getActiveCheckout, saveActiveCheckout, finishCheckout, withCheckoutLock } from '@/lib/checkout-attempt';
+import { checkoutStorageKey, clearLinkedCheckoutForOrder, finishCheckout, finishOrderPaymentAttempt, getActiveCheckout, loadCheckoutAttempt, loadOrderPaymentAttempt, saveActiveCheckout, withCheckoutLock } from '@/lib/checkout-attempt';
+import { submitOrderPayment, type OrderPaymentMethod } from '@/lib/order-payment';
+import { buildOrderItemsPayload, fetchOrderQuote, type OrderQuote } from '@/lib/order-quote';
 import { matchesOrderCode, orderCode, paymentLabel, primaryPayment, successfulSpend, type HistoryPayment } from '@/lib/order-history';
 import type { Product } from '@/types/product';
 
@@ -38,6 +47,7 @@ type Order = {
   id: number | string;
   total: number;
   status: string;
+  rewardPointsEarned?: number;
   createdAt?: string;
   items?: {
     id: number;
@@ -52,6 +62,49 @@ type Order = {
   }[];
   payment?: HistoryPayment[];
 };
+
+function LoyaltyPolicyTable({
+  samplePoints,
+  caption,
+  compact = false,
+}: {
+  samplePoints: number;
+  caption: string;
+  compact?: boolean;
+}) {
+  const points = samplePoints > 0 ? samplePoints : 5;
+  return (
+    <div className={`loyalty-policy-wrap${compact ? ' is-compact' : ''}`}>
+      <p className="loyalty-policy-caption">{caption}</p>
+      <table className="loyalty-policy-table" aria-label="Chính sách điểm chờ và hủy đơn">
+        <thead>
+          <tr>
+            <th>Thời điểm</th>
+            <th>Điểm được ghi nhận</th>
+            <th>Điểm có thể dùng</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Thanh toán thành công (<code>PAID</code>)</td>
+            <td>+{points}</td>
+            <td>0 — đang chờ</td>
+          </tr>
+          <tr>
+            <td>Bắt đầu pha chế (<code>PREPARING</code>)</td>
+            <td>Giữ nguyên {points}</td>
+            <td>{points}</td>
+          </tr>
+          <tr>
+            <td>Hủy trước pha chế (<code>CANCELLED</code>)</td>
+            <td>Thu hồi {points}</td>
+            <td>0</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 const currency = (amount: number) =>
   new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
@@ -134,6 +187,7 @@ export default function Storefront({
   const items = useCartStore((state) => state.items);
   const addItem = useCartStore((state) => state.addItem);
   const consumeItems = useCartStore((state) => state.consumeItems);
+  const syncCatalog = useCartStore((state) => state.syncCatalog);
   const token = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -160,27 +214,69 @@ export default function Storefront({
   const [historyRequest, setHistoryRequest] = useState(0);
   const [historySearch, setHistorySearch] = useState('');
   const [expandedOrders, setExpandedOrders] = useState<Set<string> | null>(null);
-  const { rewardPoints, refetch: refetchProfile } = useUserProfile();
+  const { rewardPoints, pendingRewardPoints, availableRewardPoints, refetch: refetchProfile } = useUserProfile();
   const [voucherInput, setVoucherInput] = useState('');
   const [appliedVoucher, setAppliedVoucher] = useState<string | null>(null);
   const [voucherError, setVoucherError] = useState('');
+  const [voucherBusy, setVoucherBusy] = useState(false);
+  const [serverQuoteState, setServerQuoteState] = useState<{
+    quoteKey: string;
+    itemsKey: string;
+    data: OrderQuote;
+  } | null>(null);
+  const [quoteErrorState, setQuoteErrorState] = useState<{
+    quoteKey: string;
+    message: string;
+  } | null>(null);
   const [usePoints, setUsePoints] = useState(false);
   const [pointsToUse, setPointsToUse] = useState(0);
   const [receipt, setReceipt] = useState<{ id: number | string; total?: number; status: string } | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<number | string | null>(null);
   const [cancelMessage, setCancelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [payingOrderId, setPayingOrderId] = useState<number | string | null>(null);
+  const [historyPayMethod, setHistoryPayMethod] = useState<OrderPaymentMethod>('WALLET');
+  const [historyPayBusyOrderId, setHistoryPayBusyOrderId] = useState<number | string | null>(null);
+  const [historyPayError, setHistoryPayError] = useState('');
   const checkoutInFlight = useRef(false);
+  const quoteSeqRef = useRef(0);
+  const lastQuotedKeyRef = useRef<string | null>(null);
+
+  async function refreshProducts() {
+    try {
+      const data = await apiFetch<Product[]>('/products');
+      setProducts(data);
+      await useCartStore.persist.rehydrate();
+      syncCatalog(data);
+    } catch {
+      // Best-effort stock refresh after checkout, cancel, or conflict.
+    }
+  }
+
+  function handleCopyVoucher(code: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(code).catch(() => {});
+    }
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 2500);
+  }
 
   async function cancelOrder(orderId: number | string) {
-    if (!window.confirm(`Bạn có chắc chắn muốn hủy đơn hàng #${orderId} không?`)) return;
+    if (!window.confirm(`Hủy đơn hàng #${orderId}?\n\nKho, điểm đã đổi và lượt voucher sẽ được hoàn lại. Nếu đơn đã thanh toán, hệ thống ghi nhận hoàn tiền mô phỏng và thu hồi điểm chờ của đơn. Điểm chỉ được sử dụng khi quán bắt đầu pha chế; từ lúc đó đơn không còn được hủy.`)) return;
     setCancellingOrderId(orderId);
     setCancelMessage(null);
     try {
       await apiFetch(`/orders/${orderId}/cancel`, { method: 'PATCH' });
+      clearLinkedCheckoutForOrder(token, orderId);
+      if (payingOrderId !== null && String(payingOrderId) === String(orderId)) {
+        setPayingOrderId(null);
+        setHistoryPayError('');
+      }
       setCancelMessage({ type: 'success', text: `Đã hủy thành công đơn hàng #${orderId}.` });
       setHistoryRequest((r) => r + 1);
       notifyProfileUpdate();
       void refetchProfile();
+      void refreshProducts();
       if (receipt && String(receipt.id) === String(orderId)) {
         setReceipt((prev) => prev ? { ...prev, status: 'CANCELLED' } : null);
       }
@@ -191,6 +287,123 @@ export default function Storefront({
       });
     } finally {
       setCancellingOrderId(null);
+    }
+  }
+
+  function openHistoryPayment(order: Order) {
+    setPayingOrderId(order.id);
+    setHistoryPayError('');
+    setCancelMessage(null);
+    const fallbackMethod = primaryPayment(order.payment)?.method;
+    let preferred: OrderPaymentMethod =
+      fallbackMethod === 'CREDIT_CARD' || fallbackMethod === 'MOMO' ? fallbackMethod : 'WALLET';
+    if (token && order.status === 'PENDING') {
+      try {
+        const { attempt } = loadOrderPaymentAttempt(token, order.id, order.status);
+        if (
+          attempt.paymentMethod === 'WALLET' ||
+          attempt.paymentMethod === 'CREDIT_CARD' ||
+          attempt.paymentMethod === 'MOMO'
+        ) {
+          preferred = attempt.paymentMethod;
+        }
+      } catch {
+        // Ignore corrupt saved attempt while opening panel; submit will surface error if needed.
+      }
+    }
+    setHistoryPayMethod(preferred);
+  }
+
+  async function payHistoryOrder(order: Order) {
+    if (historyPayBusyOrderId !== null) return;
+    if (!token) {
+      setAuthMode('login');
+      setAuthOpen(true);
+      return;
+    }
+
+    setHistoryPayBusyOrderId(order.id);
+    setHistoryPayError('');
+    setCancelMessage(null);
+    try {
+      await withCheckoutLock(token, async () => {
+        const authorization = { Authorization: `Bearer ${token}` };
+        const latestOrder = await apiFetch<Order>(`/orders/${order.id}`, { headers: authorization });
+        if (!['PENDING', 'PAYMENT_FAILED'].includes(latestOrder.status)) {
+          clearLinkedCheckoutForOrder(token, latestOrder.id);
+          setPayingOrderId(null);
+          setHistoryRequest((r) => r + 1);
+          setCancelMessage({
+            type: latestOrder.status === 'PAID' ? 'success' : 'error',
+            text: latestOrder.status === 'CANCELLED'
+              ? `Đơn ${orderCode(latestOrder.id)} đã bị hủy trước đó.`
+              : `Đơn ${orderCode(latestOrder.id)} hiện đang ở trạng thái ${statuses[latestOrder.status] ?? latestOrder.status}.`,
+          });
+          return;
+        }
+
+        const { storageKey, attempt, linkedCheckoutKey } = loadOrderPaymentAttempt(
+          token,
+          latestOrder.id,
+          latestOrder.status,
+        );
+        const { resolvedStatus } = await submitOrderPayment({
+          token,
+          storageKey,
+          attempt,
+          orderId: latestOrder.id,
+          amount: latestOrder.total,
+          method: historyPayMethod,
+          orderStatus: latestOrder.status,
+        });
+
+        await useCartStore.persist.rehydrate();
+        if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
+          throw new Error('Tài khoản đã thay đổi. Vui lòng kiểm tra đơn với tài khoản đã thanh toán.');
+        }
+
+        if (linkedCheckoutKey) {
+          const active = getActiveCheckout(token);
+          if (active?.orderId === Number(latestOrder.id) && Array.isArray(active.cartSnapshot)) {
+            consumeItems(active.cartSnapshot as CartItem[]);
+            lastQuotedKeyRef.current = null;
+          }
+        }
+        finishOrderPaymentAttempt(token, storageKey, latestOrder.id, linkedCheckoutKey);
+        setPayingOrderId(null);
+        setCancelMessage({
+          type: 'success',
+          text: `Đã thanh toán thành công đơn hàng ${orderCode(latestOrder.id)}.`,
+        });
+        if (receipt && String(receipt.id) === String(latestOrder.id)) {
+          setReceipt({ id: latestOrder.id, total: latestOrder.total, status: resolvedStatus });
+        }
+        setHistoryRequest((r) => r + 1);
+        notifyProfileUpdate();
+        void refetchProfile();
+        void refreshProducts();
+      });
+    } catch (error) {
+      setHistoryPayError(error instanceof Error ? error.message : 'Không thể hoàn tất thanh toán.');
+      if (error instanceof ApiError && error.status === 401) {
+        setAuthMode('login');
+        setAuthOpen(true);
+      }
+    } finally {
+      setHistoryPayBusyOrderId(null);
+    }
+  }
+
+  function navigateToSection(sectionId: string) {
+    if (view !== 'menu') {
+      setView('menu');
+      setTimeout(() => {
+        const el = document.getElementById(sectionId);
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      }, 60);
+    } else {
+      const el = document.getElementById(sectionId);
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
     }
   }
 
@@ -207,13 +420,18 @@ export default function Storefront({
   useEffect(() => {
     let active = true;
     apiFetch<Product[]>('/products')
-      .then((data) => { if (active) setProducts(data); })
+      .then(async (data) => {
+        if (!active) return;
+        setProducts(data);
+        await useCartStore.persist.rehydrate();
+        if (active) syncCatalog(data);
+      })
       .catch((error: unknown) => {
         if (active) setProductsError(error instanceof Error ? error.message : 'Không thể tải thực đơn.');
       })
       .finally(() => { if (active) setProductsLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [syncCatalog]);
 
   useEffect(() => {
     if (view !== 'orders') return;
@@ -234,43 +452,119 @@ export default function Storefront({
     const query = searchQuery.trim().toLocaleLowerCase('vi');
     const featuredProducts = products.slice(0, 16);
     return query
-      ? featuredProducts.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
+      ? products.filter((product) => product.name.toLocaleLowerCase('vi').includes(query))
       : featuredProducts;
   }, [products, searchQuery]);
-  const subtotal = useMemo(
+  const itemsPayloadKey = useMemo(
+    () => JSON.stringify(buildOrderItemsPayload(items)),
+    [items],
+  );
+  const clientSubtotal = useMemo(
     () => items.reduce((sum, item) => sum + getConfiguredUnitPrice(item.product, item.options) * item.quantity, 0),
     [items],
   );
-  const voucherDiscount = useMemo(() => {
-    if (!appliedVoucher) return 0;
-    if (appliedVoucher.toUpperCase() === 'GIAM10') {
-      return Math.min(Math.round(subtotal * 0.1), 50000);
-    }
-    return 0;
-  }, [appliedVoucher, subtotal]);
+  const activeQuote =
+    serverQuoteState &&
+    serverQuoteState.itemsKey === itemsPayloadKey &&
+    (serverQuoteState.data.voucherCode ?? null) === (appliedVoucher ?? null)
+      ? serverQuoteState.data
+      : null;
+  const subtotal = activeQuote ? activeQuote.subtotal : clientSubtotal;
+  const voucherDiscount = appliedVoucher && activeQuote ? activeQuote.voucherDiscount : 0;
 
   const totalAfterVoucher = Math.max(0, subtotal - voucherDiscount);
-  const maxUsablePoints = Math.min(rewardPoints, Math.floor(totalAfterVoucher / 1000));
+  const maxUsablePoints = Math.max(0, Math.min(availableRewardPoints, Math.floor(totalAfterVoucher / 1000)));
   const actualPointsToUse = usePoints ? Math.min(pointsToUse, maxUsablePoints) : 0;
   const pointsDiscount = actualPointsToUse * 1000;
-  const total = Math.max(0, totalAfterVoucher - pointsDiscount);
-  const earnedPoints = Math.floor(total / 10000);
+  const currentQuoteKey = `${itemsPayloadKey}|${appliedVoucher ?? ''}|${actualPointsToUse}`;
+  const exactQuote = activeQuote && activeQuote.pointsToUse === actualPointsToUse ? activeQuote : null;
+  const total = exactQuote ? exactQuote.total : Math.max(0, totalAfterVoucher - pointsDiscount);
+  const earnedPoints = exactQuote ? exactQuote.earnedPoints : Math.floor(total / 10000);
+  const quoteError = quoteErrorState?.quoteKey === currentQuoteKey ? quoteErrorState.message : '';
+  const quoteBusy =
+    view === 'checkout' &&
+    items.length > 0 &&
+    serverQuoteState?.quoteKey !== currentQuoteKey &&
+    quoteErrorState?.quoteKey !== currentQuoteKey;
 
-  function applyVoucher(code?: string) {
-    const target = (code ?? voucherInput).trim().toUpperCase();
+  useEffect(() => {
+    if (view !== 'checkout' || items.length === 0) return;
+    if (lastQuotedKeyRef.current === currentQuoteKey) return;
+    const seq = ++quoteSeqRef.current;
+    let active = true;
+    fetchOrderQuote({
+      items,
+      voucherCode: appliedVoucher,
+      pointsToUse: actualPointsToUse,
+    })
+      .then((data) => {
+        if (!active || seq !== quoteSeqRef.current) return;
+        const confirmedKey = `${itemsPayloadKey}|${data.voucherCode ?? ''}|${actualPointsToUse}`;
+        lastQuotedKeyRef.current = confirmedKey;
+        setQuoteErrorState(null);
+        setServerQuoteState({ quoteKey: confirmedKey, itemsKey: itemsPayloadKey, data });
+      })
+      .catch((error: unknown) => {
+        if (!active || seq !== quoteSeqRef.current) return;
+        const message = error instanceof Error ? error.message : 'Không thể xác nhận báo giá từ server.';
+        if (appliedVoucher) {
+          lastQuotedKeyRef.current = null;
+          setAppliedVoucher(null);
+          setServerQuoteState(null);
+          setVoucherError(message);
+        } else {
+          lastQuotedKeyRef.current = currentQuoteKey;
+          setQuoteErrorState({ quoteKey: currentQuoteKey, message });
+        }
+      });
+    return () => { active = false; };
+  }, [view, items, itemsPayloadKey, appliedVoucher, actualPointsToUse, currentQuoteKey]);
+
+  async function applyVoucher(code?: string) {
+    const target = (code ?? voucherInput).trim();
     if (!target) {
       setVoucherError('Vui lòng nhập mã ưu đãi');
       return;
     }
-    setAppliedVoucher(target);
-    setVoucherInput(target);
+    if (items.length === 0) {
+      setVoucherError('Giỏ hàng đang trống');
+      return;
+    }
+    const seq = ++quoteSeqRef.current;
+    setVoucherBusy(true);
     setVoucherError('');
+    setQuoteErrorState(null);
+    try {
+      const quoted = await fetchOrderQuote({
+        items,
+        voucherCode: target,
+        pointsToUse: actualPointsToUse,
+      });
+      if (seq !== quoteSeqRef.current) return;
+      const confirmedKey = `${itemsPayloadKey}|${quoted.voucherCode ?? ''}|${actualPointsToUse}`;
+      lastQuotedKeyRef.current = confirmedKey;
+      setServerQuoteState({ quoteKey: confirmedKey, itemsKey: itemsPayloadKey, data: quoted });
+      setAppliedVoucher(quoted.voucherCode);
+      setVoucherInput(quoted.voucherCode ?? target);
+    } catch (error) {
+      if (seq !== quoteSeqRef.current) return;
+      lastQuotedKeyRef.current = null;
+      setAppliedVoucher(null);
+      setServerQuoteState(null);
+      setVoucherError(error instanceof Error ? error.message : 'Mã giảm giá không hợp lệ hoặc đã hết hạn!');
+    } finally {
+      if (seq === quoteSeqRef.current) {
+        setVoucherBusy(false);
+      }
+    }
   }
 
   function removeVoucher() {
     setAppliedVoucher(null);
     setVoucherInput('');
     setVoucherError('');
+    setServerQuoteState(null);
+    lastQuotedKeyRef.current = null;
   }
 
   function handleTogglePoints(checked: boolean) {
@@ -334,6 +628,9 @@ export default function Storefront({
       setAuthOpen(true);
       return;
     }
+    void refetchProfile();
+    setPayingOrderId(null);
+    setHistoryPayError('');
     setHistoryLoading(true);
     setHistoryError('');
     setHistoryRequest((request) => request + 1);
@@ -378,14 +675,7 @@ export default function Storefront({
           voucherCode?: string;
           pointsToUse?: number;
         } = {
-          items: items.map(({ product, quantity, options }) => {
-            const normalized = normalizeProductOptions(options);
-            return {
-              productId: product.id, quantity, size: normalized.size,
-              toppingIds: normalized.toppings.map(({ id }) => id),
-              sweetness: normalized.sweetness, ice: normalized.ice, note: normalized.note,
-            };
-          }),
+          items: buildOrderItemsPayload(items),
         };
         if (appliedVoucher) {
           orderPayload.voucherCode = appliedVoucher;
@@ -422,7 +712,7 @@ export default function Storefront({
         if (attempt.paymentMethod && attempt.paymentMethod !== method) {
           throw new Error('Lần thanh toán trước chưa rõ kết quả. Vui lòng chọn lại phương thức trước đó để kiểm tra, hoặc xem lịch sử đơn.');
         }
-        saveActiveCheckout(token, { storageKey, body });
+        saveActiveCheckout(token, { storageKey, body, cartSnapshot: items });
         let created: { orderId: number; order: { total: number } };
         try {
           created = await apiFetch('/orders', {
@@ -430,6 +720,7 @@ export default function Storefront({
           });
         } catch (error) {
           if (error instanceof ApiError && [400, 404].includes(error.status)) finishCheckout(token, storageKey);
+          if (error instanceof ApiError && [400, 404, 409].includes(error.status)) void refreshProducts();
           throw error;
         }
         const orderId = created.orderId;
@@ -437,39 +728,21 @@ export default function Storefront({
         if (!Number.isInteger(orderId) || !Number.isFinite(amount) || amount < 0) {
           throw new Error('API tạo đơn không trả về mã đơn hoặc tổng tiền hợp lệ.');
         }
-        saveActiveCheckout(token, { storageKey, body, orderId });
+        saveActiveCheckout(token, { storageKey, body, orderId, cartSnapshot: items });
         const currentOrder = await apiFetch<Order>(`/orders/${orderId}`, { headers: authorization });
         if (currentOrder.status === 'CANCELLED') {
           finishCheckout(token, storageKey);
           throw new Error('Đơn trước đã hủy. Vui lòng bấm thanh toán lại để tạo đơn mới.');
         }
-        attempt.paymentMethod = method;
-        saveCheckoutAttempt(storageKey, attempt);
-        const payment = await apiFetch<{
-          status?: string;
-          message?: string;
-          orderStatus?: string;
-          payment?: { status?: string };
-          order?: { status?: string };
-        }>('/payments', {
-          method: 'POST',
-          headers: { ...authorization, 'Idempotency-Key': attempt.paymentKey },
-          body: JSON.stringify({ orderId, method, amount }),
+        const { resolvedStatus } = await submitOrderPayment({
+          token,
+          storageKey,
+          attempt,
+          orderId,
+          amount,
+          method,
+          orderStatus: currentOrder.status,
         });
-        const paymentStatus = payment?.orderStatus ?? payment?.payment?.status ?? payment?.status ?? payment?.order?.status;
-        if (!payment || typeof paymentStatus !== 'string') throw new Error('API thanh toán không trả về trạng thái hợp lệ.');
-        if (paymentStatus === 'PAYMENT_FAILED' || paymentStatus === 'FAILED') {
-          attempt.paymentKey = crypto.randomUUID();
-          delete attempt.paymentMethod;
-          saveCheckoutAttempt(storageKey, attempt);
-          throw new Error(payment.message ?? 'Thanh toán thất bại. Vui lòng thử lại.');
-        }
-        if (paymentStatus !== 'PAID' && paymentStatus !== 'SUCCESS') {
-          throw new Error(payment.message ?? `Thanh toán chưa hoàn tất (${paymentStatus}).`);
-        }
-        if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
-          throw new Error('Tài khoản đã thay đổi. Đơn đã thanh toán thuộc tài khoản trước; giỏ hiện tại được giữ nguyên.');
-        }
         await useCartStore.persist.rehydrate();
         if (getUserIdFromAccessToken(getAccessToken() ?? '') !== getUserIdFromAccessToken(token)) {
           throw new Error('Tài khoản đã thay đổi. Vui lòng kiểm tra đơn với tài khoản đã thanh toán.');
@@ -477,15 +750,20 @@ export default function Storefront({
         setReceipt({
           id: orderId,
           total: amount,
-          status: payment.order?.status ?? payment.orderStatus ?? paymentStatus ?? 'PAID',
+          status: resolvedStatus,
         });
         consumeItems(items);
         setAppliedVoucher(null);
         setVoucherInput('');
+        setVoucherError('');
+        setServerQuoteState(null);
+        setQuoteErrorState(null);
+        lastQuotedKeyRef.current = null;
         setUsePoints(false);
         setPointsToUse(0);
         notifyProfileUpdate();
         void refetchProfile();
+        void refreshProducts();
         finishCheckout(token, storageKey);
         setView('confirmation');
       });
@@ -505,10 +783,10 @@ export default function Storefront({
     <>
       <SiteHeader
         navItems={[
-          { label: 'Trang chủ', href: '/', active: true },
-          { label: 'Menu', href: '/menu' },
-          { label: 'Khuyến mãi', href: '/menu#menu-promo' },
-          { label: 'Giới thiệu', href: '/menu#menu-intro' },
+          { label: 'Trang chủ', href: '#top', active: view === 'menu', onClick: () => navigateToSection('top') },
+          { label: 'Menu', href: '/menu', onClick: () => navigateToSection('menu') },
+          { label: 'Khuyến mãi', href: '#promotions', onClick: () => navigateToSection('promotions') },
+          { label: 'Giới thiệu', href: '#about', onClick: () => navigateToSection('about') },
         ]}
         onSearchChange={setSearchQuery}
         onSearchOpen={() => setView('menu')}
@@ -587,6 +865,195 @@ export default function Storefront({
           </div>
         </section>
 
+        {/* SECTION: KHUYẾN MÃI & TÍCH ĐIỂM */}
+        <section className="promo-section" id="promotions">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow"><Gift size={13} /> ƯU ĐÃI ĐẶC QUYỀN</span>
+              <h2>Chương trình Khuyến mãi & Tích điểm</h2>
+            </div>
+            <span className="menu-subtitle">Tiết kiệm nhiều hơn · Thưởng thức trọn vẹn</span>
+          </div>
+
+          <div className="promo-grid">
+            <article className="promo-card promo-card--featured">
+              <div className="promo-card__badge">GIẢM 10%</div>
+              <div className="promo-card__body">
+                <div className="promo-card__icon-wrap">
+                  <Tag size={24} />
+                </div>
+                <h3>Ưu đãi đặt món trực tuyến</h3>
+                <p>Giảm ngay 10% trên tổng giá trị đơn hàng (tối đa 50.000đ) khi đặt món qua hệ thống BrewLite.</p>
+                <div className="promo-code-box">
+                  <span className="promo-code-text">Mã: <strong>GIAM10</strong></span>
+                  <button
+                    type="button"
+                    className="promo-copy-btn"
+                    onClick={() => handleCopyVoucher('GIAM10')}
+                  >
+                    {copiedCode === 'GIAM10' ? <><CheckCheck size={14} /> Đã sao chép</> : <><Copy size={14} /> Sao chép</>}
+                  </button>
+                </div>
+                <div className="promo-card__footer">
+                  <small>Hạn dùng: Đang áp dụng · Không giới hạn số lần</small>
+                </div>
+              </div>
+            </article>
+
+            <article className="promo-card">
+              <div className="promo-card__badge promo-card__badge--gold">HOÀN TIỀN 10%</div>
+              <div className="promo-card__body">
+                <div className="promo-card__icon-wrap promo-card__icon-wrap--gold">
+                  <Award size={24} />
+                </div>
+                <h3>Tích điểm BrewLite Rewards</h3>
+                <p>Tích lũy <strong>1 điểm cho mỗi 10.000đ</strong> thanh toán. Điểm chờ được mở khóa khi quán bắt đầu pha chế. Đổi <strong>1 điểm khả dụng = 1.000đ</strong> cho đơn hàng tiếp theo.</p>
+                <div className="promo-loyalty-highlight">
+                  <div className="promo-loyalty-stat">
+                    <strong>10.000đ</strong>
+                    <span>Chi tiêu = 1 điểm</span>
+                  </div>
+                  <div className="promo-loyalty-arrow">➜</div>
+                  <div className="promo-loyalty-stat">
+                    <strong>1.000đ</strong>
+                    <span>Giảm / 1 điểm</span>
+                  </div>
+                </div>
+                <LoyaltyPolicyTable
+                  samplePoints={5}
+                  caption="Ví dụ đơn 50.000đ (+5 điểm):"
+                  compact
+                />
+                <div className="promo-card__footer">
+                  <small>Mở khóa tự động khi bắt đầu pha chế · Hủy trước pha chế sẽ thu hồi điểm chờ</small>
+                </div>
+              </div>
+            </article>
+
+            <article className="promo-card">
+              <div className="promo-card__badge promo-card__badge--green">TIỆN LỢI</div>
+              <div className="promo-card__body">
+                <div className="promo-card__icon-wrap promo-card__icon-wrap--green">
+                  <Sparkles size={24} />
+                </div>
+                <h3>Đặt trước - Nhận tại quầy</h3>
+                <p>Chủ động thời gian, không cần xếp hàng chờ đợi. Đồ uống luôn tươi mới và sẵn sàng khi bạn ghé quán.</p>
+                <ul className="promo-benefits-list">
+                  <li><Check size={14} /> 0đ phí giao hàng, nhận món nhanh</li>
+                  <li><Check size={14} /> Đảm bảo độ mát lạnh & hương vị chuẩn xác</li>
+                  <li><Check size={14} /> Tùy chọn lượng đá, độ ngọt theo ý muốn</li>
+                </ul>
+                <div className="promo-card__footer">
+                  <button
+                    type="button"
+                    onClick={() => navigateToSection('menu')}
+                    className="button button-primary button-full promo-order-btn"
+                  >
+                    Khám phá thực đơn <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div className="promo-guide-strip">
+            <div className="promo-guide-item">
+              <span className="promo-guide-step">01</span>
+              <div>
+                <strong>Đăng ký / Đăng nhập</strong>
+                <p>Để theo dõi lịch sử đơn và tự động tích lũy điểm thưởng cho tài khoản.</p>
+              </div>
+            </div>
+            <div className="promo-guide-item">
+              <span className="promo-guide-step">02</span>
+              <div>
+                <strong>Chọn món & Tùy biến</strong>
+                <p>Tự do lựa chọn size ly, mức đá, độ ngọt và topping tươi giòn.</p>
+              </div>
+            </div>
+            <div className="promo-guide-item">
+              <span className="promo-guide-step">03</span>
+              <div>
+                <strong>Áp dụng ưu đãi & Nhận nước</strong>
+                <p>Nhập mã <strong>GIAM10</strong> hoặc trừ điểm thưởng tại bước thanh toán.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* SECTION: GIỚI THIỆU VỀ BREWLITE */}
+        <section className="about-section" id="about">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow"><Coffee size={13} /> VỀ BREWLITE</span>
+              <h2>Good Drink - Good Day</h2>
+            </div>
+            <span className="menu-subtitle">Mỗi ngày một chút dịu dàng · Tử tế từ từng hạt cà phê</span>
+          </div>
+
+          <div className="about-layout">
+            <div className="about-story-card">
+              <span className="about-quote-mark">“</span>
+              <h3>Khởi nguồn từ niềm đam mê cà phê và trà mộc Việt Nam</h3>
+              <p>
+                BrewLite bắt đầu từ một ý niệm giản dị: giữa những bận rộn hối hả thường nhật, một ly nước ngon pha bằng sự tử tế có thể thắp sáng cả một ngày của bạn.
+              </p>
+              <p>
+                Chúng tôi trân trọng từng hạt cà phê Robusta đậm đà từ Buôn Ma Thuột, Arabica thanh khiết Cầu Đất (Đà Lạt), và những búp trà xanh mộc mạc tuyển chọn từ vùng chè Bảo Lộc. Tất cả đều được rang mới đều đặn mỗi tuần để giữ trọn vẹn hương vị tự nhiên và tươi mới nhất.
+              </p>
+              <div className="about-signature">
+                <strong>Đội ngũ BrewLite</strong>
+                <small>Tận tâm phục vụ bạn mỗi ngày</small>
+              </div>
+            </div>
+
+            <div className="about-pillars">
+              <article className="about-pillar-card">
+                <div className="about-pillar-icon"><Leaf size={22} /></div>
+                <div className="about-pillar-content">
+                  <h4>Nguyên liệu mộc tuyển chọn</h4>
+                  <p>100% nông sản sạch từ cao nguyên Việt Nam. Rang mộc nguyên bản, không hương liệu tổng hợp hay chất bảo quản độc hại.</p>
+                </div>
+              </article>
+
+              <article className="about-pillar-card">
+                <div className="about-pillar-icon"><Clock size={22} /></div>
+                <div className="about-pillar-content">
+                  <h4>Pha chế thủ công & Tùy biến</h4>
+                  <p>Pha mới ngay khi có đơn. Tự do tùy biến size ly, lượng đá, độ ngọt (100%, 70%, 50%, 30%) và topping tươi giòn.</p>
+                </div>
+              </article>
+
+              <article className="about-pillar-card">
+                <div className="about-pillar-icon"><ShieldCheck size={22} /></div>
+                <div className="about-pillar-content">
+                  <h4>Bền vững & Thân thiện môi trường</h4>
+                  <p>Ưu tiên sử dụng ly giấy, ống hút giấy và bao bì phân hủy sinh học vì môi trường sống xanh và sức khỏe cộng đồng.</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div className="about-metrics-strip">
+            <div className="about-metric-item">
+              <strong>100%</strong>
+              <span>Cà phê & Trà mộc sạch</span>
+            </div>
+            <div className="about-metric-item">
+              <strong>40+</strong>
+              <span>Thức uống & Bánh ngọt đa dạng</span>
+            </div>
+            <div className="about-metric-item">
+              <strong>&lt; 5 phút</strong>
+              <span>Thời gian chuẩn bị nhận tại quầy</span>
+            </div>
+            <div className="about-metric-item">
+              <strong>4.9 ★</strong>
+              <span>Đánh giá hài lòng từ khách hàng</span>
+            </div>
+          </div>
+        </section>
+
         {items.length > 0 && (
           <aside className="menu-floating-cart" aria-label="Xem giỏ hàng nhanh">
             <div className="menu-floating-cart__content">
@@ -634,8 +1101,8 @@ export default function Storefront({
                 <button
                   type="button"
                   className={`checkout-promo-chip ${appliedVoucher === 'GIAM10' ? 'is-applied' : ''}`}
-                  onClick={() => applyVoucher('GIAM10')}
-                  disabled={checkoutBusy}
+                  onClick={() => void applyVoucher('GIAM10')}
+                  disabled={checkoutBusy || voucherBusy}
                 >
                   <strong>GIAM10</strong> · Giảm 10% (tối đa 50k)
                 </button>
@@ -644,13 +1111,18 @@ export default function Storefront({
                 <div className="checkout-voucher-applied">
                   <div className="checkout-voucher-applied__info">
                     <Check size={16} className="checkout-voucher-applied__icon" />
-                    <span>Mã ưu đãi <strong>{appliedVoucher}</strong> đã được áp dụng</span>
+                    <span>
+                      Mã ưu đãi <strong>{appliedVoucher}</strong> đã được áp dụng
+                      {activeQuote?.voucher
+                        ? ` (giảm ${activeQuote.voucher.discountPct}%, tối đa ${currency(activeQuote.voucher.maxDiscount)})`
+                        : ''}
+                    </span>
                   </div>
                   <button
                     type="button"
                     className="checkout-voucher-remove"
                     onClick={removeVoucher}
-                    disabled={checkoutBusy}
+                    disabled={checkoutBusy || voucherBusy}
                     title="Bỏ áp dụng mã này"
                   >
                     Bỏ chọn
@@ -667,19 +1139,19 @@ export default function Storefront({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        applyVoucher();
+                        void applyVoucher();
                       }
                     }}
-                    disabled={checkoutBusy}
+                    disabled={checkoutBusy || voucherBusy}
                     aria-label="Mã giảm giá"
                   />
                   <button
                     className="button button-outline checkout-apply-btn"
                     type="button"
-                    onClick={() => applyVoucher()}
-                    disabled={checkoutBusy || !voucherInput.trim()}
+                    onClick={() => void applyVoucher()}
+                    disabled={checkoutBusy || voucherBusy || !voucherInput.trim()}
                   >
-                    Áp dụng
+                    {voucherBusy ? 'Đang kiểm...' : 'Áp dụng'}
                   </button>
                 </div>
               )}
@@ -707,11 +1179,12 @@ export default function Storefront({
               ) : (
                 <div className="checkout-loyalty-body">
                   <div className="checkout-loyalty-balance">
-                    <span>Số điểm hiện có:</span>
+                    <span>Tổng điểm tích lũy:</span>
                     <strong>{rewardPoints.toLocaleString('vi-VN')} điểm</strong>
-                    <small>({currency(rewardPoints * 1000)})</small>
+                    <small>{availableRewardPoints.toLocaleString('vi-VN')} điểm khả dụng · {pendingRewardPoints.toLocaleString('vi-VN')} điểm chờ</small>
                   </div>
-                  {rewardPoints > 0 ? (
+                  <p className="checkout-loyalty-note">Điểm chờ được mở khóa khi quán bắt đầu pha chế. Hủy trước đó sẽ thu hồi điểm chờ.</p>
+                  {availableRewardPoints > 0 ? (
                     <div className="checkout-loyalty-action">
                       <label className="checkout-checkbox-label">
                         <input
@@ -759,17 +1232,33 @@ export default function Storefront({
                     </div>
                   ) : (
                     <p className="checkout-loyalty-note">
-                      Bạn chưa có điểm thưởng. Sau khi hoàn tất đơn này, bạn sẽ nhận được <strong>+{earnedPoints} điểm</strong>!
+                      Chưa có điểm khả dụng. Điểm được cộng khi thanh toán và mở khóa khi quán bắt đầu pha chế.
                     </p>
                   )}
+                  <LoyaltyPolicyTable
+                    samplePoints={earnedPoints > 0 ? earnedPoints : 5}
+                    caption={earnedPoints > 0
+                      ? `Minh họa trên đơn này (+${earnedPoints} điểm):`
+                      : 'Ví dụ minh họa đơn 50.000đ (+5 điểm):'}
+                    compact
+                  />
                 </div>
               )}
             </div>
 
             <div className="checkout-secure">⌑ <span>Thông tin thanh toán được bảo vệ an toàn.</span></div>
-            {checkoutError && <p className="form-error" role="alert">{checkoutError}</p>}
-            <button className="button button-primary button-full pay-button" disabled={checkoutBusy || items.length === 0} onClick={pay} type="button">
-              {checkoutBusy ? 'Đang xử lý...' : `Xác nhận & thanh toán · ${currency(total)}`}
+            {(checkoutError || quoteError) && <p className="form-error" role="alert">{checkoutError || quoteError}</p>}
+            <button
+              className="button button-primary button-full pay-button"
+              disabled={checkoutBusy || voucherBusy || quoteBusy || Boolean(quoteError) || items.length === 0}
+              onClick={pay}
+              type="button"
+            >
+              {checkoutBusy
+                ? 'Đang xử lý...'
+                : voucherBusy || quoteBusy
+                  ? 'Đang kiểm tra báo giá...'
+                  : `Xác nhận & thanh toán · ${currency(total)}`}
             </button>
             <p className="terms-copy">Bằng việc tiếp tục, bạn đồng ý với điều khoản sử dụng của BrewLite.</p>
           </div>
@@ -815,7 +1304,7 @@ export default function Storefront({
             {token && earnedPoints > 0 && (
               <div className="summary-reward-note">
                 <Award size={14} />
-                <span>Nhận ngay <strong>+{earnedPoints} điểm</strong> khi đơn hoàn thành</span>
+                <span>Nhận <strong>+{earnedPoints} điểm chờ</strong> khi thanh toán; mở khóa khi bắt đầu pha chế</span>
               </div>
             )}
           </aside>
@@ -846,7 +1335,20 @@ export default function Storefront({
               <div><span>Tổng thanh toán</span><strong>{currency(receipt.total)}</strong></div>
             )}
             {typeof receipt.total === 'number' && Math.floor(receipt.total / 10000) > 0 && (
-              <div><span>Điểm thưởng nhận được</span><strong className="summary-points-earned">+{Math.floor(receipt.total / 10000)} điểm</strong></div>
+              <div>
+                <span>
+                  {receipt.status === 'CANCELLED'
+                    ? 'Điểm chờ đã thu hồi'
+                    : receipt.status === 'PAID'
+                      ? 'Điểm chờ của đơn (mở khóa lúc pha chế)'
+                      : ['PREPARING', 'READY', 'COMPLETED'].includes(receipt.status)
+                        ? 'Điểm thưởng đã mở khóa'
+                        : 'Điểm dự kiến khi thanh toán'}
+                </span>
+                <strong className="summary-points-earned">
+                  {receipt.status === 'CANCELLED' ? '-' : '+'}{Math.floor(receipt.total / 10000)} điểm
+                </strong>
+              </div>
             )}
           </div>
 
@@ -860,6 +1362,9 @@ export default function Storefront({
               >
                 {cancellingOrderId === receipt.id ? 'Đang xử lý hủy...' : 'Hủy đơn hàng này'}
               </button>
+              {receipt.status === 'PAID' && (
+                <p className="confirmation-cancel-note">Hủy lúc này sẽ ghi nhận hoàn tiền mô phỏng và thu hồi điểm chờ của đơn.</p>
+              )}
             </div>
           )}
 
@@ -892,6 +1397,9 @@ export default function Storefront({
               <button className="button button-outline" onClick={() => setView('menu')} type="button">← Về thực đơn</button>
             </header>
 
+            <div className="history-alert is-success" role="status">
+              {availableRewardPoints.toLocaleString('vi-VN')} điểm khả dụng · {pendingRewardPoints.toLocaleString('vi-VN')} điểm chờ · Tổng {rewardPoints.toLocaleString('vi-VN')} điểm. Điểm được cộng khi thanh toán, mở khóa khi bắt đầu pha chế và thu hồi nếu hủy trước đó.
+            </div>
             {cancelMessage && (
               <div className={`history-alert is-${cancelMessage.type}`}>
                 <span>{cancelMessage.text}</span>
@@ -904,7 +1412,14 @@ export default function Storefront({
                 <div className="history-stats">
                   <article className="history-stat"><span className="history-stat__icon"><ClipboardList size={20} /></span><div><span>Tổng đơn hàng</span><strong>{history.length}</strong></div></article>
                   <article className="history-stat"><span className="history-stat__icon"><WalletCards size={20} /></span><div><span>Đã chi tiêu</span><strong>{currency(successfulSpend(history))}</strong></div></article>
-                  <article className="history-stat"><span className="history-stat__icon"><Award size={20} /></span><div><span>Điểm tích lũy</span><strong>{rewardPoints.toLocaleString('vi-VN')} điểm</strong></div></article>
+                  <article className="history-stat">
+                    <span className="history-stat__icon"><Award size={20} /></span>
+                    <div>
+                      <span>Điểm khả dụng / Tổng</span>
+                      <strong>{availableRewardPoints.toLocaleString('vi-VN')} / {rewardPoints.toLocaleString('vi-VN')} điểm</strong>
+                      <small className="history-stat__sub">{pendingRewardPoints.toLocaleString('vi-VN')} điểm đang chờ pha chế</small>
+                    </div>
+                  </article>
                 </div>
 
                 <div className="history-toolbar">
@@ -927,6 +1442,7 @@ export default function Storefront({
                       const orderKey = String(order.id);
                       const isExpanded = expandedOrders === null || expandedOrders.has(orderKey);
                       const paymentMethod = primaryPayment(order.payment)?.method;
+                      const orderPoints = order.rewardPointsEarned ?? 0;
                       return (
                         <article className={`history-order${isExpanded ? ' is-expanded' : ''}`} key={order.id}>
                           <button
@@ -985,14 +1501,43 @@ export default function Storefront({
                               </div>
                               <div className="history-order__total">
                                 <div><span>Tạm tính</span><strong>{currency(order.total)}</strong></div>
+                                {orderPoints > 0 && (
+                                  <div className="history-order__points">
+                                    <span>
+                                      {order.status === 'CANCELLED'
+                                        ? 'Điểm chờ đã thu hồi'
+                                        : order.status === 'PAID'
+                                          ? 'Điểm chờ mở khóa'
+                                          : 'Điểm thưởng (đã mở khóa)'}
+                                    </span>
+                                    <strong>{order.status === 'CANCELLED' ? `-${orderPoints}` : `+${orderPoints}`} điểm</strong>
+                                  </div>
+                                )}
                                 <div className="history-order__grand-total"><span>Tổng thanh toán · nhận tại quầy</span><strong>{currency(order.total)}</strong></div>
                                 <div className="history-order__actions-row">
+                                  {['PENDING', 'PAYMENT_FAILED'].includes(order.status) && (
+                                    <button
+                                      type="button"
+                                      className="button button-primary history-order__pay-btn"
+                                      onClick={() => {
+                                        if (payingOrderId === order.id) {
+                                          setPayingOrderId(null);
+                                          setHistoryPayError('');
+                                        } else {
+                                          openHistoryPayment(order);
+                                        }
+                                      }}
+                                      disabled={cancellingOrderId === order.id || historyPayBusyOrderId === order.id}
+                                    >
+                                      {order.status === 'PAYMENT_FAILED' ? 'Thanh toán lại' : 'Thanh toán ngay'}
+                                    </button>
+                                  )}
                                   {['PENDING', 'PAYMENT_FAILED', 'PAID'].includes(order.status) && (
                                     <button
                                       type="button"
                                       className="button button-outline history-order__cancel-btn"
                                       onClick={() => cancelOrder(order.id)}
-                                      disabled={cancellingOrderId === order.id}
+                                      disabled={cancellingOrderId === order.id || historyPayBusyOrderId === order.id}
                                     >
                                       {cancellingOrderId === order.id ? 'Đang hủy...' : 'Hủy đơn'}
                                     </button>
@@ -1000,6 +1545,60 @@ export default function Storefront({
                                   <button className="history-order__detail" onClick={() => toggleOrder(order.id)} type="button">Thu gọn</button>
                                 </div>
                               </div>
+                              {['PENDING', 'PAYMENT_FAILED'].includes(order.status) && payingOrderId === order.id && (
+                                <div className="history-order__pay-panel" role="region" aria-label={`Thanh toán đơn ${orderCode(order.id)}`}>
+                                  <div className="history-order__pay-head">
+                                    <strong>Hoàn tất thanh toán {orderCode(order.id)}</strong>
+                                    <p>
+                                      {order.status === 'PAYMENT_FAILED'
+                                        ? 'Thanh toán trước đó thất bại. Chọn phương thức để thử thanh toán lại hoặc bấm Hủy đơn.'
+                                        : 'Đơn đang chờ thanh toán (đã giữ hàng theo đơn). Chọn phương thức để thanh toán ngay hoặc bấm Hủy đơn để hoàn kho/voucher/điểm.'}
+                                    </p>
+                                  </div>
+                                  <div className="history-order__pay-methods">
+                                    {([
+                                      { value: 'WALLET', label: 'Ví điện tử' },
+                                      { value: 'CREDIT_CARD', label: 'Thẻ ngân hàng' },
+                                      { value: 'MOMO', label: 'Ví MoMo' },
+                                    ] as const).map((option) => (
+                                      <button
+                                        key={option.value}
+                                        type="button"
+                                        className={`history-pay-method${historyPayMethod === option.value ? ' is-selected' : ''}`}
+                                        onClick={() => setHistoryPayMethod(option.value)}
+                                        disabled={historyPayBusyOrderId === order.id}
+                                        aria-pressed={historyPayMethod === option.value}
+                                      >
+                                        {option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {historyPayError && <p className="history-order__pay-error" role="alert">{historyPayError}</p>}
+                                  <div className="history-order__pay-actions">
+                                    <button
+                                      type="button"
+                                      className="button button-primary history-order__pay-submit"
+                                      onClick={() => void payHistoryOrder(order)}
+                                      disabled={historyPayBusyOrderId === order.id}
+                                    >
+                                      {historyPayBusyOrderId === order.id
+                                        ? 'Đang thanh toán...'
+                                        : `Xác nhận thanh toán · ${currency(order.total)}`}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="button button-outline history-order__pay-close"
+                                      onClick={() => {
+                                        setPayingOrderId(null);
+                                        setHistoryPayError('');
+                                      }}
+                                      disabled={historyPayBusyOrderId === order.id}
+                                    >
+                                      Đóng
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </article>
@@ -1019,6 +1618,7 @@ export default function Storefront({
         <ProductDetailModal
           key={selectedProduct.id}
           product={selectedProduct}
+          inCartQuantity={getProductQuantityInCart(items, selectedProduct.id)}
           toppings={toppings}
           toppingsLoading={toppingsLoading}
           toppingsError={toppingsError}
@@ -1031,7 +1631,36 @@ export default function Storefront({
         />
       )}
 
-      <footer className="site-footer"><a className="brand footer-brand" href="#top"><span className="brand-mark">B</span><span>Brew<span>Lite</span></span></a><span>Cà phê tử tế, mỗi ngày.</span><span>© BrewLite 2026</span></footer>
+      <footer className="site-footer">
+        <div className="site-footer__main">
+          <div className="site-footer__brand-col">
+            <a className="brand footer-brand" href="#top"><span className="brand-mark">B</span><span>Brew<span>Lite</span></span></a>
+            <p>Thương hiệu cà phê và trà mộc tử tế. Đặt món trực tuyến nhanh chóng, nhận đồ uống tươi ngon tại quầy.</p>
+            <div className="site-footer__contact">
+              <span>Hotline: <strong>0909 123 456</strong></span>
+              <span>Giờ mở cửa: <strong>07:00 - 22:00</strong> mỗi ngày</span>
+            </div>
+          </div>
+          <div className="site-footer__links-col">
+            <h4>Khám phá</h4>
+            <a href="#top" onClick={() => navigateToSection('top')}>Trang chủ</a>
+            <a href="#menu" onClick={() => navigateToSection('menu')}>Thực đơn</a>
+            <a href="#promotions" onClick={() => navigateToSection('promotions')}>Khuyến mãi & Vouchers</a>
+            <a href="#about" onClick={() => navigateToSection('about')}>Về BrewLite</a>
+          </div>
+          <div className="site-footer__links-col">
+            <h4>Hội viên & Đơn hàng</h4>
+            <button type="button" onClick={() => { setAuthMode('login'); setAuthOpen(true); }}>Đăng nhập / Đăng ký</button>
+            <button type="button" onClick={openHistory}>Lịch sử đơn hàng</button>
+            <a href="#promotions" onClick={() => navigateToSection('promotions')}>Chính sách tích điểm</a>
+            <a href="/cart">Giỏ hàng ({items.reduce((s, i) => s + i.quantity, 0)})</a>
+          </div>
+        </div>
+        <div className="site-footer__bottom">
+          <span>© 2026 BrewLite. Good Drink - Good Day.</span>
+          <span>Bảo vệ thông tin & cam kết vệ sinh an toàn thực phẩm.</span>
+        </div>
+      </footer>
 
       {authOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAuthOpen(false); }} role="presentation">
         <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">

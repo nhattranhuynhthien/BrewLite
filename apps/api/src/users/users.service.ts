@@ -10,7 +10,7 @@ export class UsersService {
   async findOne(id: number) {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, name: true, email: true, rewardPoints: true, createdAt: true },
+      select: { id: true, name: true, email: true, rewardPoints: true, pendingRewardPoints: true, createdAt: true },
     });
     if (!user) throw new NotFoundException('Không tìm thấy tài khoản');
     return user;
@@ -21,7 +21,7 @@ export class UsersService {
       return await this.prisma.user.update({
         where: { id },
         data: { name: updateUserDto.name.trim() },
-        select: { id: true, name: true, email: true, rewardPoints: true, createdAt: true },
+        select: { id: true, name: true, email: true, rewardPoints: true, pendingRewardPoints: true, createdAt: true },
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {

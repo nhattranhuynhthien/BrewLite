@@ -8,6 +8,7 @@ export interface UserProfile {
   name: string;
   email: string;
   rewardPoints: number;
+  pendingRewardPoints: number;
 }
 
 const PROFILE_UPDATE_EVENT = 'brewlite:profile-update';
@@ -40,8 +41,10 @@ export function useUserProfile() {
       fetchProfile();
     };
     window.addEventListener(PROFILE_UPDATE_EVENT, handleUpdate);
+    window.addEventListener('focus', handleUpdate);
     return () => {
       window.removeEventListener(PROFILE_UPDATE_EVENT, handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
     };
   }, [fetchProfile]);
 
@@ -49,6 +52,8 @@ export function useUserProfile() {
   return {
     profile,
     rewardPoints: profile?.rewardPoints ?? 0,
+    pendingRewardPoints: profile?.pendingRewardPoints ?? 0,
+    availableRewardPoints: Math.max(0, (profile?.rewardPoints ?? 0) - (profile?.pendingRewardPoints ?? 0)),
     loading: Boolean(token && (result?.token !== token || result?.revision !== revision)),
     refetch: fetchProfile,
   };

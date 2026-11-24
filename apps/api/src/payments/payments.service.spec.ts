@@ -53,6 +53,9 @@ function createFakePrisma() {
       update: async ({ where, data }: any) => {
         const u = db.users.get(where.id);
         u.rewardPoints += data.rewardPoints.increment;
+        if (data.pendingRewardPoints?.increment !== undefined) {
+          u.pendingRewardPoints += data.pendingRewardPoints.increment;
+        }
         return { ...u };
       },
     },
@@ -120,12 +123,14 @@ describe('PaymentsService (trạng thái đơn + payment)', () => {
   const pay = (key: string | undefined = 'k1', method = 'MOMO') =>
     service.create({ orderId: ORDER, method }, key, USER);
   const points = () => fake.db.users.get(USER).rewardPoints;
+  const pendingPoints = () => fake.db.users.get(USER).pendingRewardPoints;
+  const orderPoints = () => fake.db.orders.get(ORDER).rewardPointsEarned ?? 0;
   const orderStatus = () => fake.db.orders.get(ORDER).status;
 
   beforeEach(async () => {
     fake = createFakePrisma();
     gateway = new MockPaymentGateway();
-    fake.db.users.set(USER, { id: USER, rewardPoints: 100 });
+    fake.db.users.set(USER, { id: USER, rewardPoints: 100, pendingRewardPoints: 0 });
     seedOrder(OrderStatus.PENDING);
 
     const moduleRef = await Test.createTestingModule({
@@ -150,6 +155,8 @@ describe('PaymentsService (trạng thái đơn + payment)', () => {
       });
       expect(orderStatus()).toBe('PAID');
       expect(points()).toBe(102);
+      expect(pendingPoints()).toBe(2);
+      expect(orderPoints()).toBe(2);
       expect(fake.db.payments).toHaveLength(1);
       expect(gateway.calls).toEqual([
         { orderId: ORDER, amount: TOTAL, method: 'MOMO', idempotencyKey: 'k1' },
@@ -163,6 +170,8 @@ describe('PaymentsService (trạng thái đơn + payment)', () => {
       expect(res).toMatchObject({ status: 'FAILED', orderStatus: 'PAYMENT_FAILED', rewardPointsAdded: 0 });
       expect(orderStatus()).toBe('PAYMENT_FAILED');
       expect(points()).toBe(100);
+      expect(pendingPoints()).toBe(0);
+      expect(orderPoints()).toBe(0);
       expect(fake.db.payments.map((p) => p.status)).toEqual(['FAILED']);
     });
 
@@ -175,6 +184,8 @@ describe('PaymentsService (trạng thái đơn + payment)', () => {
       expect(res).toMatchObject({ fromCache: false, status: 'PAID' });
       expect(orderStatus()).toBe('PAID');
       expect(points()).toBe(102);
+      expect(pendingPoints()).toBe(2);
+      expect(orderPoints()).toBe(2);
       expect(fake.db.payments.map((p) => p.status)).toEqual(['FAILED', 'PAID']);
     });
 
@@ -185,6 +196,8 @@ describe('PaymentsService (trạng thái đơn + payment)', () => {
 
       expect(orderStatus()).toBe('PAYMENT_FAILED');
       expect(points()).toBe(100);
+      expect(pendingPoints()).toBe(0);
+      expect(orderPoints()).toBe(0);
       expect(fake.db.payments.map((p) => p.status)).toEqual(['FAILED', 'FAILED']);
     });
   });
@@ -200,6 +213,7 @@ describe('PaymentsService (trạng thái đơn + payment)', () => {
         expect(orderStatus()).toBe(status);
         expect(fake.db.payments).toHaveLength(0);
         expect(points()).toBe(100);
+        expect(pendingPoints()).toBe(0);
         expect(gateway.calls).toHaveLength(0);
         expect(fake.db.keys.size).toBe(0);
       },

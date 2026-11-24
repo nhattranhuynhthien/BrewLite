@@ -42,6 +42,8 @@
 .product-modal__stepper button:hover:not(:disabled) { background: #edf3ee; }
 .product-modal__stepper button:disabled { color: #bdc3be; cursor: not-allowed; }
 .product-modal__stepper output { min-width: 24px; color: #263a33; font-size: 0.85rem; text-align: center; }
+.product-modal__stock-note { margin: -8px 0 14px; color: #4d6759; font-size: 0.76rem; }
+.product-modal__stock-note.is-limit { color: #a34436; font-weight: 600; }
 .product-modal__note { display: grid; gap: 7px; margin: 0 0 15px; }
 .product-modal__note > span { color: #293d37; font-size: 0.83rem; font-weight: 700; }
 .product-modal__note textarea {

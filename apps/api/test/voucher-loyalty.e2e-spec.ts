@@ -146,7 +146,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
       });
  
     expect(response.status).toBe(400);
-    expect(response.body.message).toContain('không đủ điểm thưởng');
+    expect(response.body.message).toContain('Không đủ điểm khả dụng');
   });
  
   it('4. Thanh toán đơn hàng thành công sẽ tích lũy điểm thưởng (1 điểm / 10.000đ)', async () => {
@@ -257,7 +257,7 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
   it('8. Chỉ một request đồng thời dùng được số điểm còn lại', async () => {
     await prisma.user.update({
       where: { id: testUserId },
-      data: { rewardPoints: 5 },
+      data: { rewardPoints: 5, pendingRewardPoints: 0 },
     });
     const ordersBefore = await prisma.order.count({ where: { userId: testUserId } });
     const stockBefore = (await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock;
@@ -279,5 +279,63 @@ describe('Voucher & Loyalty Points (Integration Test - Task 10.4)', () => {
     expect((await prisma.user.findUnique({ where: { id: testUserId } }))?.rewardPoints).toBe(0);
     expect(await prisma.order.count({ where: { userId: testUserId } })).toBe(ordersBefore + 1);
     expect((await prisma.product.findUniqueOrThrow({ where: { id: testProductId } })).stock).toBe(stockBefore - 1);
+  });
+
+  it('9. POST /orders/quote kiểm tra voucher DB, tổng tồn kho nhiều biến thể và không trừ lượt dùng', async () => {
+    const quotePromoCode = `${prefix}-QUOTE25`;
+    const limitedProduct = await prisma.product.create({
+      data: { name: `${prefix}-limited`, price: 40000, stock: 2, isAvailable: true },
+    });
+    await prisma.promotion.create({
+      data: { code: quotePromoCode, discountPct: 25, maxDiscount: 30000, usageLimit: 3 },
+    });
+
+    try {
+      const validRes = await request(app.getHttpServer())
+        .post('/orders/quote')
+        .send({
+          items: [
+            { productId: testProductId, quantity: 1, size: 'M', toppingIds: [testToppingId] },
+          ],
+          voucherCode: quotePromoCode.toLowerCase(),
+        })
+        .expect(200);
+
+      // 100.000 + 5.000 (size M) + 5.000 (topping) = 110.000; 25% = 27.500 (< max 30.000) -> 82.500
+      expect(validRes.body).toEqual({
+        subtotal: 110000,
+        voucherCode: quotePromoCode,
+        voucherDiscount: 27500,
+        voucher: { code: quotePromoCode, discountPct: 25, maxDiscount: 30000 },
+        totalAfterVoucher: 82500,
+        pointsToUse: 0,
+        pointsDiscount: 0,
+        total: 82500,
+        earnedPoints: 8,
+      });
+      expect((await prisma.promotion.findUnique({ where: { code: quotePromoCode } }))?.usageLimit).toBe(3);
+
+      await prisma.promotion.update({ where: { code: quotePromoCode }, data: { usageLimit: 0 } });
+      await request(app.getHttpServer())
+        .post('/orders/quote')
+        .send({
+          items: [{ productId: limitedProduct.id, quantity: 1 }],
+          voucherCode: quotePromoCode,
+        })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/orders/quote')
+        .send({
+          items: [
+            { productId: limitedProduct.id, quantity: 2, size: 'M' },
+            { productId: limitedProduct.id, quantity: 1, size: 'L' },
+          ],
+        })
+        .expect(400);
+    } finally {
+      await prisma.promotion.deleteMany({ where: { code: quotePromoCode } });
+      await prisma.product.deleteMany({ where: { id: limitedProduct.id } });
+    }
   });
 });

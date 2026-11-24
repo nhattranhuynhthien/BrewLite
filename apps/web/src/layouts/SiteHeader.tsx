@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { ChevronRight, ClipboardList, Coffee, LogIn, LogOut, Search, ShoppingCart, UserRound } from 'lucide-react';
+import { Award, ChevronRight, ClipboardList, Coffee, LogIn, LogOut, Search, ShoppingCart, UserRound } from 'lucide-react';
 import { useSiteHeader } from '@/hooks/useSiteHeader';
+import { useUserProfile } from '@/hooks/useUserProfile';
 import { getAccessToken, setAccessToken, subscribeToAccessToken } from '@/lib/api';
 import '@/styles/SiteHeader.css';
 
@@ -43,6 +44,7 @@ export default function SiteHeader({
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const accessToken = useSyncExternalStore(subscribeToAccessToken, getAccessToken, () => null);
   const authenticated = Boolean(accessToken);
+  const { profile } = useUserProfile();
   const {
     cartCount,
     closeSearch,
@@ -120,6 +122,12 @@ export default function SiteHeader({
           {onCartClick
             ? <button className="site-header__cart" onClick={onCartClick} type="button" aria-label={`Giỏ hàng, ${cartCount} món`}><ShoppingCart aria-hidden="true" size={20} strokeWidth={1.8} /><span>{cartCount}</span></button>
             : <Link className="site-header__cart" href={cartHref ?? '/#menu'} aria-label={`Giỏ hàng, ${cartCount} món`}><ShoppingCart aria-hidden="true" size={20} strokeWidth={1.8} /><span>{cartCount}</span></Link>}
+          {authenticated && profile && (
+            <div className="site-header__points" title={`Điểm khả dụng để sử dụng. Tổng ${profile.rewardPoints.toLocaleString('vi-VN')} điểm, ${profile.pendingRewardPoints ?? 0} điểm chờ`}>
+              <Award aria-hidden="true" size={14} />
+              <span>{Math.max(0, profile.rewardPoints - (profile.pendingRewardPoints ?? 0)).toLocaleString('vi-VN')} điểm</span>
+            </div>
+          )}
           <div className="site-header__account-wrap" ref={accountMenuRef}>
             <button
               className={`site-header__account${authenticated ? ' is-authenticated' : ''}`}
@@ -136,6 +144,16 @@ export default function SiteHeader({
               <div className="site-header__account-menu" role="menu">
                 {authenticated ? (
                   <>
+                    {profile && (
+                      <div className="site-header__account-profile">
+                        <strong>{profile.name}</strong>
+                        <span className="site-header__account-email">{profile.email}</span>
+                        <div className="site-header__account-points">
+                          <Award aria-hidden="true" size={13} />
+                          <span>Tổng điểm: <strong>{profile.rewardPoints.toLocaleString('vi-VN')}</strong> · Chờ: {profile.pendingRewardPoints ?? 0}</span>
+                        </div>
+                      </div>
+                    )}
                     {onOrdersClick ? (
                       <button
                         className="site-header__account-menu-item"

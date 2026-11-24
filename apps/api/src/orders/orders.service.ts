@@ -13,9 +13,157 @@ import { createHash } from 'node:crypto';
 
 class StockConflict extends ConflictException {}
 
+const SIZE_SURCHARGE: Record<string, number> = {
+  M: 5000,
+  L: 10000,
+};
+
+export interface OrderQuoteResult {
+  subtotal: number;
+  voucherCode: string | null;
+  voucherDiscount: number;
+  voucher: {
+    code: string;
+    discountPct: number;
+    maxDiscount: number;
+  } | null;
+  totalAfterVoucher: number;
+  pointsToUse: number;
+  pointsDiscount: number;
+  total: number;
+  earnedPoints: number;
+}
+
 @Injectable()
 export class OrdersService {
   constructor(private prisma: PrismaService) {}
+
+  private static calculateItemUnitPrice(
+    basePrice: number,
+    size: string | undefined,
+    toppingsTotal: number,
+  ): number {
+    return basePrice + (size ? (SIZE_SURCHARGE[size] ?? 0) : 0) + toppingsTotal;
+  }
+
+  private static calculateVoucherDiscount(
+    subtotal: number,
+    promo: { discountPct: number; maxDiscount: number },
+  ): number {
+    return Math.round(Math.min((subtotal * promo.discountPct) / 100, promo.maxDiscount));
+  }
+
+  private async resolvePromotion(
+    client: Pick<PrismaService, 'promotion'>,
+    voucherCode: string,
+  ) {
+    const trimmed = voucherCode.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Mã giảm giá không hợp lệ hoặc đã hết hạn!');
+    }
+    let promo = await client.promotion.findUnique({ where: { code: trimmed } });
+    if (!promo && typeof client.promotion.findFirst === 'function') {
+      promo = await client.promotion.findFirst({
+        where: { code: { equals: trimmed, mode: 'insensitive' } },
+      });
+    }
+    if (!promo || promo.usageLimit <= 0) {
+      throw new BadRequestException('Mã giảm giá không hợp lệ hoặc đã hết hạn!');
+    }
+    return promo;
+  }
+
+  async quote(quoteOrderDto: CreateOrderDto): Promise<OrderQuoteResult> {
+    if (!quoteOrderDto.items || quoteOrderDto.items.length === 0) {
+      throw new BadRequestException('Đơn hàng phải chứa ít nhất một sản phẩm.');
+    }
+
+    const productIds = [...new Set(quoteOrderDto.items.map((item) => Number(item.productId)))];
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: productIds } },
+    });
+    const productMap = new Map(products.map((product) => [product.id, product]));
+
+    const allToppingIds = [
+      ...new Set(quoteOrderDto.items.flatMap((item) => item.toppingIds ?? [])),
+    ];
+    const toppings = allToppingIds.length
+      ? await this.prisma.topping.findMany({ where: { id: { in: allToppingIds } } })
+      : [];
+    const toppingMap = new Map(toppings.map((topping) => [topping.id, topping]));
+
+    const requestedByProduct = new Map<number, number>();
+    let subtotal = 0;
+
+    for (const item of quoteOrderDto.items) {
+      const productId = Number(item.productId);
+      const product = productMap.get(productId);
+      if (!product) {
+        throw new NotFoundException(`Không tìm thấy sản phẩm có mã: ${item.productId}`);
+      }
+      if (!product.isAvailable) {
+        throw new BadRequestException(`Sản phẩm "${product.name}" hiện không khả dụng.`);
+      }
+
+      const nextRequested = (requestedByProduct.get(productId) ?? 0) + item.quantity;
+      if (product.stock < nextRequested) {
+        throw new BadRequestException(
+          `Sản phẩm "${product.name}" không đủ hàng. Chỉ còn lại ${product.stock} sản phẩm.`,
+        );
+      }
+      requestedByProduct.set(productId, nextRequested);
+
+      let toppingsTotal = 0;
+      if (item.toppingIds?.length) {
+        for (const toppingId of item.toppingIds) {
+          const topping = toppingMap.get(toppingId);
+          if (!topping) {
+            throw new BadRequestException(`Một hoặc nhiều Topping cho món "${product.name}" không hợp lệ.`);
+          }
+          toppingsTotal += topping.price;
+        }
+      }
+
+      const itemUnitPrice = OrdersService.calculateItemUnitPrice(
+        product.price,
+        item.size,
+        toppingsTotal,
+      );
+      subtotal += itemUnitPrice * item.quantity;
+    }
+
+    let voucher: OrderQuoteResult['voucher'] = null;
+    let voucherDiscount = 0;
+    if (quoteOrderDto.voucherCode) {
+      const promo = await this.resolvePromotion(this.prisma, quoteOrderDto.voucherCode);
+      voucherDiscount = OrdersService.calculateVoucherDiscount(subtotal, promo);
+      voucher = {
+        code: promo.code,
+        discountPct: promo.discountPct,
+        maxDiscount: promo.maxDiscount,
+      };
+    }
+
+    const totalAfterVoucher = Math.max(0, subtotal - voucherDiscount);
+    const pointsToUse = Math.min(
+      Math.max(0, quoteOrderDto.pointsToUse ?? 0),
+      Math.floor(totalAfterVoucher / 1000),
+    );
+    const pointsDiscount = pointsToUse * 1000;
+    const total = Math.max(0, totalAfterVoucher - pointsDiscount);
+
+    return {
+      subtotal,
+      voucherCode: voucher?.code ?? null,
+      voucherDiscount,
+      voucher,
+      totalAfterVoucher,
+      pointsToUse,
+      pointsDiscount,
+      total,
+      earnedPoints: Math.floor(total / 10000),
+    };
+  }
 
   async create(userId: number, createOrderDto: CreateOrderDto, idempotencyKey?: string, stockRetries = 10): Promise<{ message: string; orderId: number; order: Prisma.OrderGetPayload<{ include: { items: true } }> }> {
     if (idempotencyKey !== undefined && (!idempotencyKey.trim() || idempotencyKey.length > 200)) {
@@ -93,25 +241,8 @@ export class OrdersService {
           );
         }
 
-        let itemUnitPrice = product.price;
-
-        if (item.size === 'M') {
-          itemUnitPrice += 5000;
-        } else if (item.size === 'L') {
-          itemUnitPrice += 10000;
-        }
-
-        const orderItemPayload: Prisma.OrderItemCreateWithoutOrderInput = {
-          quantity: item.quantity,
-          size: item.size || null,
-          sweetness: item.sweetness || null,
-          ice: item.ice || null,
-          note: item.note || null,
-          unitPrice: itemUnitPrice,
-          product: {
-            connect: { id: Number(item.productId) },
-          },
-        };
+        let toppingsTotal = 0;
+        let resolvedToppings: Array<{ id: number; name: string; price: number }> | undefined;
 
         if (item.toppingIds?.length) {
           const toppings = await tx.topping.findMany({
@@ -122,11 +253,28 @@ export class OrdersService {
             throw new BadRequestException(`Một hoặc nhiều Topping cho món "${product.name}" không hợp lệ.`);
           }
 
-          const toppingsTotal = toppings.reduce((sum, topping) => sum + topping.price, 0);
-          itemUnitPrice += toppingsTotal;
-          orderItemPayload.unitPrice = itemUnitPrice;
-          orderItemPayload.toppings = toppings.map(({ id, name, price }) => ({ id, name, price }));
+          toppingsTotal = toppings.reduce((sum, topping) => sum + topping.price, 0);
+          resolvedToppings = toppings.map(({ id, name, price }) => ({ id, name, price }));
         }
+
+        const itemUnitPrice = OrdersService.calculateItemUnitPrice(
+          product.price,
+          item.size,
+          toppingsTotal,
+        );
+
+        const orderItemPayload: Prisma.OrderItemCreateWithoutOrderInput = {
+          quantity: item.quantity,
+          size: item.size || null,
+          sweetness: item.sweetness || null,
+          ice: item.ice || null,
+          note: item.note || null,
+          unitPrice: itemUnitPrice,
+          ...(resolvedToppings ? { toppings: resolvedToppings } : {}),
+          product: {
+            connect: { id: Number(item.productId) },
+          },
+        };
 
         calculatedTotal += itemUnitPrice * item.quantity;
 
@@ -136,28 +284,23 @@ export class OrdersService {
       // 2. Kiểm tra Voucher giảm giá
       let promoToUpdate: number | null = null;
       if (createOrderDto.voucherCode) {
-        const promo = await tx.promotion.findUnique({
-          where: { code: createOrderDto.voucherCode },
-        });
-
-        if (promo && promo.usageLimit > 0) {
-          const discountAmount = Math.round(Math.min((calculatedTotal * promo.discountPct) / 100, promo.maxDiscount));
-          calculatedTotal -= discountAmount;
-          promoToUpdate = promo.id;
-        } else {
-          throw new BadRequestException('Mã giảm giá không hợp lệ hoặc đã hết hạn!');
-        }
+        const promo = await this.resolvePromotion(tx, createOrderDto.voucherCode);
+        const discountAmount = OrdersService.calculateVoucherDiscount(calculatedTotal, promo);
+        calculatedTotal -= discountAmount;
+        promoToUpdate = promo.id;
       }
 
       // 3. Kiểm tra logic dùng điểm thưởng
       const pointsToUse = Math.min(createOrderDto.pointsToUse ?? 0, Math.floor(calculatedTotal / 1000));
+      let pendingPoints = 0;
       if (pointsToUse) {
         const user = await tx.user.findUnique({
           where: { id: userId },
         });
 
-        if (!user || user.rewardPoints < pointsToUse) {
-          throw new BadRequestException('Tài khoản không đủ điểm thưởng để áp dụng');
+        pendingPoints = user?.pendingRewardPoints ?? 0;
+        if (!user || user.rewardPoints - pendingPoints < pointsToUse) {
+          throw new BadRequestException('Không đủ điểm khả dụng. Điểm chờ chỉ được dùng khi đơn bắt đầu pha chế.');
         }
 
         const pointDiscount = pointsToUse * 1000;
@@ -180,7 +323,7 @@ export class OrdersService {
       // 5. Trừ điểm của người dùng
       if (pointsToUse) {
         const pointsUpdate = await tx.user.updateMany({
-          where: { id: userId, rewardPoints: { gte: pointsToUse } },
+          where: { id: userId, rewardPoints: { gte: pointsToUse + pendingPoints }, pendingRewardPoints: pendingPoints },
           data: { rewardPoints: { decrement: pointsToUse } },
         });
         if (pointsUpdate.count !== 1) {
@@ -304,13 +447,13 @@ export class OrdersService {
       }
 
       if (order.status === OrderStatus.PAID) {
-        const points = Math.floor(order.total / 10000);
+        const points = order.rewardPointsEarned;
         if (points > 0) {
-          const reversal = await tx.user.updateMany({
-            where: { id: userId, rewardPoints: { gte: points } },
-            data: { rewardPoints: { decrement: points } },
+          // Reverse the locked award exactly once, together with cancellation.
+          await tx.user.update({
+            where: { id: userId },
+            data: { rewardPoints: { decrement: points }, pendingRewardPoints: { decrement: points } },
           });
-          if (reversal.count !== 1) throw new ConflictException('Không đủ điểm để hoàn tác điểm thưởng của đơn.');
         }
         await tx.payment.updateMany({
           where: { orderId, status: 'PAID' },
@@ -352,6 +495,12 @@ export class OrdersService {
         );
       }
 
+      if (order.status === OrderStatus.PAID && updateOrderDto.status === OrderStatus.PREPARING && order.rewardPointsEarned > 0) {
+        await tx.user.update({
+          where: { id: order.userId },
+          data: { pendingRewardPoints: { decrement: order.rewardPointsEarned } },
+        });
+      }
       return tx.order.findUnique({ where: { id } });
     });
   }

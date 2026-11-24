@@ -13,6 +13,7 @@ describe('OrdersService.cancel', () => {
     userId: 42,
     status: 'PENDING',
     total: 50000,
+    rewardPointsEarned: 5,
     items: [{ productId: 3, quantity: 2 }],
     payment: [],
   };
@@ -88,17 +89,18 @@ describe('OrdersService.cancel', () => {
       where: { orderId: 7, status: 'PAID' },
       data: { status: 'REFUNDED', paidOrderId: null },
     });
-    expect(tx.user.updateMany).toHaveBeenCalledWith({
-      where: { id: 42, rewardPoints: { gte: 5 } },
-      data: { rewardPoints: { decrement: 5 } },
+    expect(tx.user.update).toHaveBeenCalledWith({
+      where: { id: 42 },
+      data: { rewardPoints: { decrement: 5 }, pendingRewardPoints: { decrement: 5 } },
     });
   });
 
-  it('rejects cancellation if earned points have already been spent', async () => {
+  it('cancels and removes the pending award without requiring available points', async () => {
     tx.order.findFirst.mockResolvedValue({ ...order, status: 'PAID' });
-    tx.user.updateMany.mockResolvedValue({ count: 0 });
-    await expect(service.cancel(7, 42)).rejects.toThrow(ConflictException);
-    expect(tx.payment.updateMany).not.toHaveBeenCalled();
+    tx.user.update.mockResolvedValue({ rewardPoints: 0, pendingRewardPoints: 0 });
+    await expect(service.cancel(7, 42)).resolves.toMatchObject({ status: 'CANCELLED' });
+    expect(tx.user.update).toHaveBeenCalledWith({ where: { id: 42 }, data: { rewardPoints: { decrement: 5 }, pendingRewardPoints: { decrement: 5 } } });
+    expect(tx.payment.updateMany).toHaveBeenCalled();
   });
 
   it('restores reserved voucher and spent points when cancelling', async () => {

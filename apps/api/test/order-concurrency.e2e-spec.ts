@@ -12,6 +12,8 @@ describe('Order Concurrency & Stock Locking (Integration Test - Task 10.3)', () 
   let testProductId: number;
   let authToken: string;
   const extraProductIds: number[] = [];
+  const extraUserIds: number[] = [];
+  const createdPaymentKeys: string[] = [];
 
   beforeAll(async () => {
     assertTestDatabase();
@@ -55,6 +57,16 @@ describe('Order Concurrency & Stock Locking (Integration Test - Task 10.3)', () 
 
   afterAll(async () => {
     // Dọn dẹp dữ liệu test
+    const userIdsToClean = [testUserId, ...extraUserIds].filter((id): id is number => Boolean(id));
+    if (userIdsToClean.length) {
+      const orders = await prisma.order.findMany({ where: { userId: { in: userIdsToClean } } });
+      const orderIds = orders.map((o) => o.id);
+      if (orderIds.length) {
+        await prisma.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
+        await prisma.payment.deleteMany({ where: { orderId: { in: orderIds } } });
+        await prisma.order.deleteMany({ where: { id: { in: orderIds } } });
+      }
+    }
     if (extraProductIds.length) {
       await prisma.orderItem.deleteMany({ where: { productId: { in: extraProductIds } } });
       await prisma.product.deleteMany({ where: { id: { in: extraProductIds } } });
@@ -63,14 +75,11 @@ describe('Order Concurrency & Stock Locking (Integration Test - Task 10.3)', () 
       await prisma.orderItem.deleteMany({ where: { productId: testProductId } });
       await prisma.product.deleteMany({ where: { id: testProductId } });
     }
-    if (testUserId) {
-      const orders = await prisma.order.findMany({ where: { userId: testUserId } });
-      for (const order of orders) {
-        await prisma.orderItem.deleteMany({ where: { orderId: order.id } });
-        await prisma.payment.deleteMany({ where: { orderId: order.id } });
-      }
-      await prisma.order.deleteMany({ where: { userId: testUserId } });
-      await prisma.user.deleteMany({ where: { id: testUserId } });
+    if (createdPaymentKeys.length) {
+      await prisma.procPaymentKey.deleteMany({ where: { key: { in: createdPaymentKeys } } });
+    }
+    if (userIdsToClean.length) {
+      await prisma.user.deleteMany({ where: { id: { in: userIdsToClean } } });
     }
     await app.close();
   });
@@ -228,5 +237,99 @@ describe('Order Concurrency & Stock Locking (Integration Test - Task 10.3)', () 
     for (const id of [productA, productB]) {
       expect((await prisma.product.findUniqueOrThrow({ where: { id } })).stock).toBe(0);
     }
+  });
+
+  async function createSignedUser(label: string) {
+    const user = await prisma.user.create({
+      data: {
+        email: `race-${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@brewlite.vn`,
+        name: `Race ${label}`,
+        password: 'hashed_password_123',
+      },
+    });
+    extraUserIds.push(user.id);
+    const token = await signTestToken(app, user);
+    return { user, token };
+  }
+
+  it('8. Hai người dùng khác nhau đặt cùng lúc 1 ly cuối cùng (stock = 1) -> đúng 1 người tạo đơn PENDING, người kia bị chặn, và người thắng có thể thanh toán lại từ đơn PENDING', async () => {
+    const productId = await createProduct(1);
+    const userA = await createSignedUser('A');
+    const userB = await createSignedUser('B');
+
+    const [resA, resB] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${userA.token}`)
+        .send({ items: [{ productId, quantity: 1 }] }),
+      request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${userB.token}`)
+        .send({ items: [{ productId, quantity: 1 }] }),
+    ]);
+
+    const attempts = [
+      { who: userA, res: resA },
+      { who: userB, res: resB },
+    ];
+    const winners = attempts.filter((a) => isOk(a.res.status));
+    const losers = attempts.filter((a) => [400, 409].includes(a.res.status));
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock).toBe(0);
+
+    const winner = winners[0];
+    const loser = losers[0];
+    expect(winner.res.body.order.status).toBe('PENDING');
+
+    // Khi người thắng chưa thanh toán (PENDING), người thua thử đặt lại vẫn bị chặn vì kho đang được giữ
+    const loserRetry = await request(app.getHttpServer())
+      .post('/orders')
+      .set('Authorization', `Bearer ${loser.who.token}`)
+      .send({ items: [{ productId, quantity: 1 }] });
+    expect(loserRetry.status).toBe(400);
+
+    // Người thắng quay lại từ Lịch sử và thanh toán đơn PENDING hiện có
+    const payKey = `resume-pay-${Date.now()}`;
+    createdPaymentKeys.push(payKey);
+    const resumePay = await request(app.getHttpServer())
+      .post('/payments')
+      .set('Authorization', `Bearer ${winner.who.token}`)
+      .set('Idempotency-Key', payKey)
+      .send({
+        orderId: winner.res.body.orderId,
+        method: 'MOMO',
+        amount: winner.res.body.order.total,
+      });
+    expect(resumePay.status).toBe(201);
+    expect(resumePay.body.orderStatus).toBe('PAID');
+  });
+
+  it('9. Nếu người đặt được ly cuối (PENDING) hủy đơn thay vì thanh toán, tồn kho trả về 1 để người sau đặt lại thành công', async () => {
+    const productId = await createProduct(1);
+    const userA = await createSignedUser('CancelA');
+    const userB = await createSignedUser('RetryB');
+
+    const orderA = await request(app.getHttpServer())
+      .post('/orders')
+      .set('Authorization', `Bearer ${userA.token}`)
+      .send({ items: [{ productId, quantity: 1 }] });
+    expect(orderA.status).toBe(201);
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock).toBe(0);
+
+    const cancelA = await request(app.getHttpServer())
+      .patch(`/orders/${orderA.body.orderId}/cancel`)
+      .set('Authorization', `Bearer ${userA.token}`);
+    expect(cancelA.status).toBe(200);
+    expect(cancelA.body.status).toBe('CANCELLED');
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock).toBe(1);
+
+    const orderB = await request(app.getHttpServer())
+      .post('/orders')
+      .set('Authorization', `Bearer ${userB.token}`)
+      .send({ items: [{ productId, quantity: 1 }] });
+    expect(orderB.status).toBe(201);
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock).toBe(0);
   });
 });
